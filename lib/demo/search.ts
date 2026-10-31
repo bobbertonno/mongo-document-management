@@ -74,13 +74,13 @@ function facetsOf(docs: DmsDocument[]) {
 }
 
 /**
- * Demo Mode search engine. Runs over the real persisted demo chunks using BM25 scoring.
+ * Lexical search engine. Runs over the chunks persisted in MongoDB Atlas using BM25 scoring.
  * Authorization is applied before ranking/limiting, stale (non-current) chunks are excluded,
  * and chunk hits are deduplicated into document-level results.
  */
 export async function runSearch(mode: SearchMode, query: string, filters: SearchFilters, limit = 20): Promise<SearchResponse> {
   if (mode === 'semantic' || mode === 'hybrid') {
-    throw new Error('Semantic and hybrid search require Voyage AI embeddings and Atlas Vector Search, which are not configured in Demo Mode.')
+    throw new Error('Semantic and hybrid search require Voyage AI embeddings and Atlas Vector Search, which are not configured in this deployment.')
   }
   const t0 = performance.now()
   const actor = currentActor()

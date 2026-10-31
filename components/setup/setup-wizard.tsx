@@ -15,15 +15,16 @@ import { completeSetup } from '@/lib/demo/services'
 import { fetchAtlasStatus, useDemoState } from '@/lib/demo/store'
 import useSWR from 'swr'
 
-const STEPS = ['Operating mode', 'Organization', 'Capabilities', 'Review'] as const
+const STEPS = ['Atlas connection', 'Organization', 'Capabilities', 'Review'] as const
 
 const CAPABILITIES = [
-  { name: 'Metadata store', demo: 'IndexedDB (browser)', atlas: 'MongoDB Atlas cluster', available: true },
-  { name: 'Binary storage', demo: 'IndexedDB object store', atlas: 'MongoDB GridFS bucket', available: true },
-  { name: 'Full-text search', demo: 'Local BM25 over real chunks', atlas: 'BM25 over chunks stored in Atlas', available: true },
-  { name: 'Semantic search', demo: 'Disabled', atlas: 'Voyage AI + Atlas Vector Search', available: false },
-  { name: 'Event streaming', demo: 'Transactional outbox log', atlas: 'Kafka / Confluent', available: true },
-  { name: 'Malware scanning', demo: 'Not configured (step recorded as skipped)', atlas: 'ClamAV / cloud scanner', available: false },
+  { name: 'Metadata store', engine: 'MongoDB Atlas collections', available: true },
+  { name: 'Binary storage', engine: 'MongoDB GridFS bucket', available: true },
+  { name: 'Full-text search', engine: 'BM25 over chunks stored in Atlas', available: true },
+  { name: 'Transactions', engine: 'Multi-collection MongoDB transactions', available: true },
+  { name: 'Event streaming', engine: 'Transactional outbox in Atlas', available: true },
+  { name: 'Semantic search', engine: 'Requires Voyage AI + Atlas Vector Search', available: false },
+  { name: 'Malware scanning', engine: 'Not configured (step recorded as skipped)', available: false },
 ]
 
 export function SetupWizard() {
@@ -31,26 +32,30 @@ export function SetupWizard() {
   const router = useRouter()
   const { pushToast } = useToast()
   const [step, setStep] = useState(0)
-  const [mode, setMode] = useState('demo')
   const [form, setForm] = useState({ organization: '', adminName: '', adminEmail: '' })
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [submitting, setSubmitting] = useState(false)
-  const { data: atlas, isLoading: atlasLoading } = useSWR('atlas-status', fetchAtlasStatus, { revalidateOnFocus: false })
+  const {
+    data: atlas,
+    isLoading: atlasLoading,
+    isValidating: atlasValidating,
+    mutate: recheckAtlas,
+  } = useSWR('atlas-status', fetchAtlasStatus, { revalidateOnFocus: false })
   const atlasReady = !!atlas?.connected
   const atlasText = atlasLoading
     ? 'Checking MongoDB Atlas connection...'
     : atlasReady
-      ? `Connected to database "${atlas.database}" (${atlas.latencyMs} ms). Metadata in Atlas collections, files in GridFS.`
+      ? `Connected to database "${atlas.database}" (${atlas.latencyMs} ms). Metadata is stored in Atlas collections and files in GridFS.`
       : atlas?.configured
         ? (atlas.error ?? 'MONGODB_URI is set but the cluster is unreachable.')
-        : 'Requires MONGODB_URI. Not configured in this deployment.'
+        : 'MONGODB_URI is not configured in this deployment. Add it in the project environment variables.'
 
   if (state.setup?.completed) {
     return (
       <div className="mx-auto max-w-2xl">
         <Banner variant="success">
           Setup was completed on {new Date(state.setup.completedAt!).toLocaleString()} for {state.setup.organization}. To start over,
-          use Reset demo data in System Settings.
+          use Reset all data in System Settings.
         </Banner>
         <div className="mt-4 flex gap-2">
           <Button variant="primary" onClick={() => router.push('/')}>
@@ -73,21 +78,18 @@ export function SetupWizard() {
   }
 
   const next = () => {
+    if (step === 0 && !atlasReady) return
     if (step === 1 && !validateOrg()) return
     setStep((s) => Math.min(s + 1, STEPS.length - 1))
   }
 
   const finish = async () => {
+    if (!atlasReady) return setStep(0)
     if (!validateOrg()) return setStep(1)
     setSubmitting(true)
     try {
-      const selectedMode = mode === 'atlas' && atlasReady ? 'atlas' : 'demo'
-      await completeSetup({ ...form, mode: selectedMode })
-      pushToast({
-        variant: 'success',
-        title: 'Environment ready',
-        description: selectedMode === 'atlas' ? 'Atlas Mode tenant created in MongoDB.' : 'Demo Mode tenant created.',
-      })
+      await completeSetup(form)
+      pushToast({ variant: 'success', title: 'Environment ready', description: 'Tenant created in MongoDB Atlas.' })
       router.replace('/')
     } catch (error) {
       pushToast({ variant: 'warning', title: 'Setup failed', description: (error as Error).message })
@@ -121,39 +123,26 @@ export function SetupWizard() {
       <Card className="flex flex-col gap-5">
         {step === 0 && (
           <>
-            <H3>Choose an operating mode</H3>
-            <fieldset className="flex flex-col gap-3 md:flex-row">
-              <legend className="sr-only">Operating mode</legend>
-              {[
-                { value: 'demo', title: 'Demo Mode', text: 'All data and files persist in this browser via IndexedDB. No external services.', disabled: false },
-                { value: 'atlas', title: 'Atlas Mode', text: atlasText, disabled: !atlasReady },
-              ].map((opt) => (
-                <label
-                  key={opt.value}
-                  className={`flex flex-1 cursor-pointer gap-3 rounded-lg border-2 p-4 ${
-                    mode === opt.value ? 'border-mdb-green' : 'border-border'
-                  } ${opt.disabled ? 'cursor-not-allowed opacity-50' : ''}`}
-                >
-                  <input
-                    type="radio"
-                    name="mode"
-                    value={opt.value}
-                    checked={mode === opt.value}
-                    disabled={opt.disabled}
-                    onChange={(e) => setMode(e.target.value)}
-                    className="mt-1 accent-[#00684a]"
-                  />
-                  <span className="flex flex-col gap-1">
-                    <strong className="text-sm">{opt.title}</strong>
-                    <span className="text-xs text-muted">{opt.text}</span>
-                  </span>
-                </label>
-              ))}
-            </fieldset>
-            <Banner variant="info">
-              Demo Mode runs every implemented workflow against real persisted records, but it does not use MongoDB. Each screen states
-              which engine executed the operation.
-            </Banner>
+            <H3>MongoDB Atlas connection</H3>
+            <div
+              className={`flex items-start gap-3 rounded-lg border-2 p-4 ${atlasReady ? 'border-mdb-green' : 'border-border'}`}
+              role="status"
+              aria-live="polite"
+            >
+              <Icon glyph={atlasReady ? 'CheckmarkWithCircle' : 'Warning'} className={atlasReady ? 'text-mdb-green' : 'text-muted'} />
+              <span className="flex flex-col gap-1">
+                <strong className="text-sm">{atlasReady ? 'Connected' : atlasLoading ? 'Checking' : 'Not connected'}</strong>
+                <span className="text-xs text-muted">{atlasText}</span>
+              </span>
+            </div>
+            {!atlasReady && !atlasLoading && (
+              <div className="flex items-center gap-3">
+                <Button size="small" onClick={() => void recheckAtlas()} disabled={atlasValidating}>
+                  {atlasValidating ? 'Checking...' : 'Check again'}
+                </Button>
+                <Body className="text-xs text-muted">All data, files, audit and outbox records are stored in MongoDB Atlas.</Body>
+              </div>
+            )}
           </>
         )}
 
@@ -196,18 +185,18 @@ export function SetupWizard() {
                 <thead>
                   <tr className="border-b border-border text-muted">
                     <th className="py-2 pr-4 font-medium">Capability</th>
-                    <th className="py-2 pr-4 font-medium">This environment</th>
-                    <th className="py-2 font-medium">Atlas Mode equivalent</th>
+                    <th className="py-2 pr-4 font-medium">Engine</th>
+                    <th className="py-2 font-medium">Status</th>
                   </tr>
                 </thead>
                 <tbody>
                   {CAPABILITIES.map((c) => (
                     <tr key={c.name} className="border-b border-border last:border-0">
                       <td className="py-2 pr-4 font-medium">{c.name}</td>
-                      <td className="py-2 pr-4">
-                        <Badge variant={c.available ? 'green' : 'lightgray'}>{c.demo}</Badge>
+                      <td className="py-2 pr-4 text-muted">{c.engine}</td>
+                      <td className="py-2">
+                        <Badge variant={c.available ? 'green' : 'lightgray'}>{c.available ? 'Enabled' : 'Not configured'}</Badge>
                       </td>
-                      <td className="py-2 text-muted">{c.atlas}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -221,7 +210,7 @@ export function SetupWizard() {
             <H3>Review</H3>
             <dl className="grid grid-cols-[max-content_1fr] gap-x-6 gap-y-2 text-sm">
               <dt className="text-muted">Mode</dt>
-              <dd>Demo (browser-persistent)</dd>
+              <dd>MongoDB Atlas{atlas?.database ? ` (database "${atlas.database}")` : ''}</dd>
               <dt className="text-muted">Organization</dt>
               <dd>{form.organization}</dd>
               <dt className="text-muted">Administrator</dt>
@@ -229,7 +218,7 @@ export function SetupWizard() {
                 {form.adminName} ({form.adminEmail})
               </dd>
               <dt className="text-muted">Storage</dt>
-              <dd>browser-indexeddb</dd>
+              <dd>mongodb-gridfs</dd>
               <dt className="text-muted">Embeddings</dt>
               <dd>disabled</dd>
             </dl>
@@ -241,11 +230,11 @@ export function SetupWizard() {
             Back
           </Button>
           {step < STEPS.length - 1 ? (
-            <Button variant="primary" onClick={next}>
+            <Button variant="primary" onClick={next} disabled={step === 0 && !atlasReady}>
               Continue
             </Button>
           ) : (
-            <Button variant="primary" onClick={finish} disabled={submitting}>
+            <Button variant="primary" onClick={finish} disabled={submitting || !atlasReady}>
               {submitting ? 'Creating tenant...' : 'Complete setup'}
             </Button>
           )}

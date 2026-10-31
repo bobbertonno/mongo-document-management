@@ -167,7 +167,7 @@ export function GeneratorConsole() {
         </Card>
       </div>
       <div className="mt-3">
-        <EngineNote>Runs execute in this browser tab. Atlas Mode would dispatch them to a durable worker.</EngineNote>
+        <EngineNote>Runs are orchestrated from this tab; every generated document and checkpoint is written to MongoDB Atlas.</EngineNote>
       </div>
     </>
   )

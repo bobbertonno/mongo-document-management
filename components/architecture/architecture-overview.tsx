@@ -14,25 +14,25 @@ const LAYERS = [
   },
   {
     name: 'Application services',
-    demo: 'Browser-side service module',
-    atlas: 'Route Handlers / Server Actions',
+    demo: 'Service module calling Atlas Route Handlers',
+    atlas: 'Full server-side domain logic in Route Handlers',
     items: ['Validation (zod)', 'Authorization', 'Optimistic concurrency', 'Ingestion pipeline'],
   },
   {
     name: 'Persistence',
-    demo: 'IndexedDB (metadata + object store)',
-    atlas: 'MongoDB Atlas + S3 / GridFS',
+    demo: 'MongoDB Atlas collections + GridFS (transactional writes)',
+    atlas: 'Optional S3 offload for large binaries',
     items: ['documents', 'documentVersions', 'documentChunks', 'auditEvents', 'outboxEvents', 'generationRuns'],
   },
   {
     name: 'Search',
-    demo: 'Local lexical index with ACL pre-filter',
+    demo: 'BM25 over chunks loaded from Atlas, ACL pre-filter',
     atlas: 'Atlas Search + Atlas Vector Search ($rankFusion)',
     items: ['Metadata', 'Full text', 'Semantic (needs embeddings)', 'Hybrid'],
   },
   {
     name: 'Events',
-    demo: 'Transactional outbox, unpublished',
+    demo: 'Transactional outbox stored in Atlas, unpublished',
     atlas: 'Change Streams / outbox relay to Kafka',
     items: ['document.uploaded', 'document.indexed', 'document.updated', 'document.deleted'],
   },
@@ -49,7 +49,7 @@ const GUARANTEES = [
 export function ArchitectureOverview() {
   return (
     <>
-      <PageHeader title="Architecture Overview" description="How each layer runs in Demo Mode today and how it maps to MongoDB Atlas." />
+      <PageHeader title="Architecture Overview" description="How each layer runs on MongoDB Atlas today and where it is headed next." />
       <ol className="flex flex-col gap-3">
         {LAYERS.map((l, i) => (
           <li key={l.name}>
@@ -70,14 +70,14 @@ export function ArchitectureOverview() {
                 </div>
               </div>
               <div className="flex flex-col gap-1 border-border md:border-l md:pl-4">
-                <Badge variant="lightgray" className="self-start">
-                  Demo Mode
+                <Badge variant="green" className="self-start">
+                  Implemented
                 </Badge>
                 <Body>{l.demo}</Body>
               </div>
               <div className="flex flex-col gap-1 border-border md:border-l md:pl-4">
-                <Badge variant="green" className="self-start">
-                  Atlas Mode
+                <Badge variant="lightgray" className="self-start">
+                  Roadmap
                 </Badge>
                 <Body>{l.atlas}</Body>
               </div>

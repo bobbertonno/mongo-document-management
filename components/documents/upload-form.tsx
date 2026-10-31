@@ -118,7 +118,7 @@ export function UploadForm() {
         </Card>
       </div>
       <div className="mt-3">
-        <EngineNote>Binary stored in the browser IndexedDB object store; metadata, audit and outbox committed together.</EngineNote>
+        <EngineNote>Binary stored in MongoDB GridFS; metadata, audit and outbox committed together in one Atlas transaction.</EngineNote>
       </div>
     </>
   )

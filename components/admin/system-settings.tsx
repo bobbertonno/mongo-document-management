@@ -14,6 +14,8 @@ export function SystemSettings() {
   const state = useDemoState()
   const router = useRouter()
   const [confirming, setConfirming] = useState(false)
+  const [resetting, setResetting] = useState(false)
+  const [resetError, setResetError] = useState<string | null>(null)
   const setup = state.setup
   const rows: [string, string][] = setup
     ? [
@@ -48,8 +50,10 @@ export function SystemSettings() {
           )}
         </Card>
         <Card className="flex flex-col gap-3">
-          <H3>Reset demo data</H3>
-          <Body className="text-muted">Permanently removes every document, binary, audit event and setting stored in this browser.</Body>
+          <H3>Reset all data</H3>
+          <Body className="text-muted">
+            Permanently removes every document, GridFS binary, audit event and setting from the MongoDB Atlas database.
+          </Body>
           {confirming ? (
             <>
               <Banner variant="danger">This cannot be undone.</Banner>
@@ -57,18 +61,27 @@ export function SystemSettings() {
                 <Button onClick={() => setConfirming(false)}>Cancel</Button>
                 <Button
                   variant="danger"
+                  disabled={resetting}
                   onClick={async () => {
-                    await resetDemoState()
-                    router.push('/setup')
+                    setResetting(true)
+                    setResetError(null)
+                    try {
+                      await resetDemoState()
+                      router.push('/setup')
+                    } catch (error) {
+                      setResetError((error as Error).message)
+                      setResetting(false)
+                    }
                   }}
                 >
-                  Reset everything
+                  {resetting ? 'Resetting...' : 'Reset everything'}
                 </Button>
               </div>
+              {resetError && <Banner variant="warning">{resetError}</Banner>}
             </>
           ) : (
             <Button variant="dangerOutline" onClick={() => setConfirming(true)}>
-              Reset demo data
+              Reset all data
             </Button>
           )}
         </Card>

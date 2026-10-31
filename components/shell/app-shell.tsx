@@ -11,12 +11,15 @@ import IconButton from '@leafygreen-ui/icon-button'
 import Badge from '@leafygreen-ui/badge'
 import { Body } from '@leafygreen-ui/typography'
 import { NAV } from '@/lib/navigation'
-import { loadDemoState, useDemoLoaded, useDemoState } from '@/lib/demo/store'
+import Banner from '@leafygreen-ui/banner'
+import Button from '@leafygreen-ui/button'
+import { loadDemoState, useDemoState, useStoreStatus } from '@/lib/demo/store'
 
 const THEME_KEY = 'adh-theme'
 
 export function AppShell({ children }: { children: ReactNode }) {
-  const loaded = useDemoLoaded()
+  const { loaded: storeLoaded, error: loadError } = useStoreStatus()
+  const loaded = storeLoaded && !loadError
   const state = useDemoState()
   const pathname = usePathname()
   const router = useRouter()
@@ -48,7 +51,16 @@ export function AppShell({ children }: { children: ReactNode }) {
   return (
     <LeafyGreenProvider darkMode={darkMode}>
       <ToastProvider>
-        {!loaded || (needsSetup && !onSetup) ? (
+        {loadError ? (
+          <main className="flex min-h-screen items-center justify-center px-4">
+            <div className="flex max-w-md flex-col items-start gap-4">
+              <Banner variant="danger">Could not load data from MongoDB Atlas: {loadError}</Banner>
+              <Button variant="primary" onClick={() => void loadDemoState()}>
+                Retry
+              </Button>
+            </div>
+          </main>
+        ) : !loaded || (needsSetup && !onSetup) ? (
           <div className="flex min-h-screen items-center justify-center" role="status">
             <Body>Loading Atlas Document Hub...</Body>
           </div>
@@ -93,21 +105,10 @@ export function AppShell({ children }: { children: ReactNode }) {
             <div className="flex min-w-0 flex-1 flex-col bg-background">
               <header className="sticky top-0 z-10 flex items-center justify-between gap-4 border-b border-border bg-surface px-6 py-2.5">
                 <div className="flex items-center gap-3">
-                  {state.setup?.mode === 'atlas' ? (
-                    <>
-                      <Badge variant="green">Atlas Mode</Badge>
-                      <Body className="hidden md:block" baseFontSize={13}>
-                        {state.setup?.organization} - data persisted in MongoDB Atlas (collections + GridFS)
-                      </Body>
-                    </>
-                  ) : (
-                    <>
-                      <Badge variant="yellow">Demo Mode</Badge>
-                      <Body className="hidden md:block" baseFontSize={13}>
-                        {state.setup?.organization} - data persisted in this browser (IndexedDB) only
-                      </Body>
-                    </>
-                  )}
+                  <Badge variant="green">MongoDB Atlas</Badge>
+                  <Body className="hidden md:block" baseFontSize={13}>
+                    {state.setup?.organization} - data persisted in MongoDB Atlas (collections + GridFS)
+                  </Body>
                 </div>
                 <div className="flex items-center gap-2">
                   <Link href="/status" className="text-xs font-medium text-mdb-green underline-offset-2 hover:underline">
