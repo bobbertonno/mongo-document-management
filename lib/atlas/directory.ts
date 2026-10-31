@@ -53,24 +53,54 @@ declare global {
   var __adhDirectoryReady: Map<string, Promise<void>> | undefined
 }
 
+export function describeMongoError(error: unknown): string {
+  const e = error as { code?: number; codeName?: string; message?: string }
+  const label = e.codeName ?? (e.code !== undefined ? `code ${e.code}` : 'error')
+  return `${label}: ${(e.message ?? String(error)).slice(0, 240)}`
+}
+
+/**
+ * Validators are defense-in-depth: `collMod` needs the dbAdmin privilege, which Atlas
+ * readWrite database users lack. Skip validation rather than failing every directory request.
+ */
 async function applyValidator(db: Db, name: string, schema: Document) {
-  const exists = (await db.listCollections({ name }, { nameOnly: true }).toArray()).length > 0
-  if (!exists) {
-    await db.createCollection(name, { validator: { $jsonSchema: schema }, validationLevel: 'moderate', validationAction: 'error' })
-  } else {
-    await db.command({ collMod: name, validator: { $jsonSchema: schema }, validationLevel: 'moderate', validationAction: 'error' })
+  const options = { validator: { $jsonSchema: schema }, validationLevel: 'moderate', validationAction: 'error' } as const
+  try {
+    const exists = (await db.listCollections({ name }, { nameOnly: true }).toArray()).length > 0
+    if (!exists) await db.createCollection(name, options)
+    else await db.command({ collMod: name, ...options })
+  } catch (error) {
+    if ((error as { codeName?: string }).codeName === 'NamespaceExists') return
+    console.warn(`[directory] $jsonSchema validator not applied to "${name}" (${describeMongoError(error)})`)
+  }
+}
+
+/** Index conflicts (same keys, different name/options from an earlier deploy) should not block reads. */
+async function ensureIndex(db: Db, collection: string, keys: Document, options: Document) {
+  try {
+    await db.collection(collection).createIndex(keys, options)
+  } catch (error) {
+    const code = (error as { code?: number }).code
+    if (code === 85 || code === 86) {
+      console.warn(`[directory] index ${options.name} on "${collection}" conflicts with an existing index; keeping the existing one`)
+      return
+    }
+    if (code === 11000) {
+      console.warn(`[directory] unique index ${options.name} not built: existing documents contain duplicates`)
+      return
+    }
+    throw error
   }
 }
 
 async function prepare(db: Db, tenantId: string) {
   await Promise.all([applyValidator(db, USERS, USER_SCHEMA), applyValidator(db, ROLES_COLLECTION, ROLE_SCHEMA)])
   await Promise.all([
-    db.collection(USERS).createIndex(
-      { tenantId: 1, email: 1 },
-      { name: 'tenant_email_unique', unique: true, collation: CASE_INSENSITIVE },
-    ),
-    db.collection(USERS).createIndex({ tenantId: 1, roles: 1 }, { name: 'tenant_roles' }),
-    db.collection(ROLES_COLLECTION).createIndex(
+    ensureIndex(db, USERS, { tenantId: 1, email: 1 }, { name: 'tenant_email_unique', unique: true, collation: CASE_INSENSITIVE }),
+    ensureIndex(db, USERS, { tenantId: 1, roles: 1 }, { name: 'tenant_roles' }),
+    ensureIndex(
+      db,
+      ROLES_COLLECTION,
       { tenantId: 1, name: 1 },
       { name: 'tenant_role_name_unique', unique: true, collation: CASE_INSENSITIVE },
     ),
