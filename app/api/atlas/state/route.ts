@@ -9,6 +9,7 @@ import {
   isAtlasConfigured,
   type CollectionKey,
 } from '@/lib/atlas/client'
+import { purgeS3Objects } from '@/lib/atlas/storage'
 
 export const dynamic = 'force-dynamic'
 
@@ -120,11 +121,12 @@ export async function POST(request: NextRequest) {
   }
 }
 
-/** Drops every application collection plus the GridFS object bucket. */
+/** Drops every application collection, the GridFS object bucket and app-written S3 objects. */
 export async function DELETE() {
   if (!isAtlasConfigured()) return notConfigured()
   try {
     const db = await getDb()
+    await purgeS3Objects(db).catch((error) => console.error('[storage] S3 purge during reset failed', error))
     const names = [
       SETTINGS_COLLECTION,
       ...COLLECTION_KEYS.map((k) => COLLECTIONS[k].name),

@@ -15,14 +15,16 @@ import { completeSetup } from '@/lib/demo/services'
 import { fetchAtlasStatus, useDemoState } from '@/lib/demo/store'
 import { embeddingModeFor, fetchVectorStatus, initVectorSearch } from '@/lib/demo/vector'
 import type { EmbeddingConfigInput } from '@/lib/domain/embedding'
+import { describeStorage, fetchStorageStatus, saveStorageSettings } from '@/lib/demo/storage'
+import type { StorageConfigInput } from '@/lib/domain/storage'
 import useSWR from 'swr'
+import { StoragePanel } from './storage-panel'
 import { VectorSearchPanel } from './vector-search-panel'
 
 const STEPS = ['Atlas connection', 'Organization', 'Capabilities', 'Review'] as const
 
 const CAPABILITIES = [
   { name: 'Metadata store', engine: 'MongoDB Atlas collections', available: true },
-  { name: 'Binary storage', engine: 'MongoDB GridFS bucket', available: true },
   { name: 'Full-text search', engine: 'BM25 over chunks stored in Atlas', available: true },
   { name: 'Transactions', engine: 'Multi-collection MongoDB transactions', available: true },
   { name: 'Event streaming', engine: 'Transactional outbox in Atlas', available: true },
@@ -53,6 +55,25 @@ export function SetupWizard() {
     revalidateOnFocus: false,
     refreshInterval: (latest) => (latest?.index && !latest.index.queryable ? 4000 : 0),
   })
+  const {
+    data: storage,
+    error: storageError,
+    isLoading: storageLoading,
+    mutate: mutateStorage,
+  } = useSWR(atlasReady && step >= 2 ? 'storage-status' : null, fetchStorageStatus, { revalidateOnFocus: false })
+  const [savingStorage, setSavingStorage] = useState(false)
+  const saveStorage = async (config: StorageConfigInput) => {
+    setSavingStorage(true)
+    try {
+      const status = await saveStorageSettings(config)
+      await mutateStorage(status, { revalidate: false })
+      pushToast({ variant: 'success', title: 'Storage configured', description: `Files will be stored in ${describeStorage(status)}.` })
+    } catch (error) {
+      pushToast({ variant: 'warning', title: 'Storage configuration failed', description: (error as Error).message })
+    } finally {
+      setSavingStorage(false)
+    }
+  }
   const [initializingVector, setInitializingVector] = useState(false)
   const vectorReady = !!vector?.configured && !!vector.index
   const embeddingMode = vectorReady ? embeddingModeFor(vector) : 'disabled'
@@ -76,7 +97,7 @@ export function SetupWizard() {
   const atlasText = atlasLoading
     ? 'Checking MongoDB Atlas connection...'
     : atlasReady
-      ? `Connected to database "${atlas.database}" (${atlas.latencyMs} ms). Metadata is stored in Atlas collections and files in GridFS.`
+      ? `Connected to database "${atlas.database}" (${atlas.latencyMs} ms). Metadata is stored in Atlas collections; files go to GridFS or your S3 bucket.`
       : atlas?.configured
         ? (atlas.error ?? 'MONGODB_URI is set but the cluster is unreachable.')
         : 'MONGODB_URI is not configured in this deployment. Add it in the project environment variables.'
@@ -119,7 +140,7 @@ export function SetupWizard() {
     if (!validateOrg()) return setStep(1)
     setSubmitting(true)
     try {
-      await completeSetup({ ...form, embeddingMode })
+      await completeSetup({ ...form, embeddingMode, storageProvider: storage?.provider ?? 'mongodb-gridfs' })
       pushToast({ variant: 'success', title: 'Environment ready', description: 'Tenant created in MongoDB Atlas.' })
       router.replace('/')
     } catch (error) {
@@ -233,6 +254,18 @@ export function SetupWizard() {
                 </tbody>
               </table>
             </div>
+            {storage || storageError ? (
+              <StoragePanel
+                key={storage?.updatedAt ?? (storageError ? 'error' : 'default')}
+                status={storage}
+                loading={storageLoading}
+                error={storageError as Error | undefined}
+                saving={savingStorage}
+                onSave={(config) => void saveStorage(config)}
+              />
+            ) : (
+              <Body className="text-sm text-muted">Checking storage settings...</Body>
+            )}
             {vector || vectorError ? (
               <VectorSearchPanel
                 key={vector ? `${vector.provider}:${vector.model}` : 'error'}
@@ -261,7 +294,7 @@ export function SetupWizard() {
                 {form.adminName} ({form.adminEmail})
               </dd>
               <dt className="text-muted">Storage</dt>
-              <dd>mongodb-gridfs</dd>
+              <dd className="break-all">{describeStorage(storage)}</dd>
               <dt className="text-muted">Embeddings</dt>
               <dd>
                 {vectorReady
