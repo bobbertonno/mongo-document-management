@@ -6,6 +6,7 @@ import type { DemoState } from '@/lib/domain/types'
 type CollectionKey = Exclude<keyof DemoState, 'schemaVersion' | 'setup'>
 const COLLECTION_ID_FIELDS: Record<CollectionKey, string> = {
   users: '_id',
+  roles: '_id',
   folders: '_id',
   documents: '_id',
   documentVersions: '_id',
@@ -20,6 +21,7 @@ const emptyState = (): DemoState => ({
   schemaVersion: 1,
   setup: null,
   users: [],
+  roles: [],
   folders: [],
   documents: [],
   documentVersions: [],
