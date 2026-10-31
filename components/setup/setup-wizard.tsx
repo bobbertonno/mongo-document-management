@@ -13,7 +13,9 @@ import { useToast } from '@/components/shared/toast'
 import { setupEnvironmentSchema } from '@/lib/domain/types'
 import { completeSetup } from '@/lib/demo/services'
 import { fetchAtlasStatus, useDemoState } from '@/lib/demo/store'
+import { fetchVectorStatus, initVectorSearch } from '@/lib/demo/vector'
 import useSWR from 'swr'
+import { VectorSearchPanel } from './vector-search-panel'
 
 const STEPS = ['Atlas connection', 'Organization', 'Capabilities', 'Review'] as const
 
@@ -23,7 +25,6 @@ const CAPABILITIES = [
   { name: 'Full-text search', engine: 'BM25 over chunks stored in Atlas', available: true },
   { name: 'Transactions', engine: 'Multi-collection MongoDB transactions', available: true },
   { name: 'Event streaming', engine: 'Transactional outbox in Atlas', available: true },
-  { name: 'Semantic search', engine: 'Requires Voyage AI + Atlas Vector Search', available: false },
   { name: 'Malware scanning', engine: 'Not configured (step recorded as skipped)', available: false },
 ]
 
@@ -42,6 +43,30 @@ export function SetupWizard() {
     mutate: recheckAtlas,
   } = useSWR('atlas-status', fetchAtlasStatus, { revalidateOnFocus: false })
   const atlasReady = !!atlas?.connected
+  const {
+    data: vector,
+    error: vectorError,
+    isLoading: vectorLoading,
+    mutate: mutateVector,
+  } = useSWR(atlasReady && step >= 2 ? 'vector-status' : null, fetchVectorStatus, {
+    revalidateOnFocus: false,
+    refreshInterval: (latest) => (latest?.index && !latest.index.queryable ? 4000 : 0),
+  })
+  const [initializingVector, setInitializingVector] = useState(false)
+  const vectorReady = !!vector?.voyageConfigured && !!vector.index
+  const embeddingMode = vectorReady ? 'voyage' : 'disabled'
+
+  const initializeVector = async () => {
+    setInitializingVector(true)
+    try {
+      await mutateVector(await initVectorSearch(), { revalidate: false })
+      pushToast({ variant: 'success', title: 'Vector search initialized', description: 'Atlas Vector Search index created.' })
+    } catch (error) {
+      pushToast({ variant: 'warning', title: 'Vector search failed', description: (error as Error).message })
+    } finally {
+      setInitializingVector(false)
+    }
+  }
   const atlasText = atlasLoading
     ? 'Checking MongoDB Atlas connection...'
     : atlasReady
@@ -88,7 +113,7 @@ export function SetupWizard() {
     if (!validateOrg()) return setStep(1)
     setSubmitting(true)
     try {
-      await completeSetup(form)
+      await completeSetup({ ...form, embeddingMode })
       pushToast({ variant: 'success', title: 'Environment ready', description: 'Tenant created in MongoDB Atlas.' })
       router.replace('/')
     } catch (error) {
@@ -202,6 +227,13 @@ export function SetupWizard() {
                 </tbody>
               </table>
             </div>
+            <VectorSearchPanel
+              status={vector}
+              loading={vectorLoading}
+              error={vectorError as Error | undefined}
+              initializing={initializingVector}
+              onInitialize={() => void initializeVector()}
+            />
           </>
         )}
 
@@ -220,7 +252,7 @@ export function SetupWizard() {
               <dt className="text-muted">Storage</dt>
               <dd>mongodb-gridfs</dd>
               <dt className="text-muted">Embeddings</dt>
-              <dd>disabled</dd>
+              <dd>{vectorReady ? `Voyage AI ${vector.model} (${vector.dimensions} dims) + Atlas Vector Search` : 'disabled'}</dd>
             </dl>
           </>
         )}

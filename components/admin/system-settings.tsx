@@ -9,6 +9,7 @@ import { Body, H3 } from '@leafygreen-ui/typography'
 import { PageHeader } from '@/components/shell/page-header'
 import { resetDemoState, useDemoState } from '@/lib/demo/store'
 import { formatDateTime } from '@/lib/demo/util'
+import { VectorSearchSettings } from './vector-search-settings'
 
 export function SystemSettings() {
   const state = useDemoState()
@@ -85,6 +86,7 @@ export function SystemSettings() {
             </Button>
           )}
         </Card>
+        {setup && <VectorSearchSettings />}
       </div>
     </>
   )

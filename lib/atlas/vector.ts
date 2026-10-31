@@ -21,7 +21,10 @@ export interface VectorStatus {
 
 export async function getVectorIndex(db: Db): Promise<VectorIndexInfo | null> {
   try {
-    const [index] = await chunks(db).listSearchIndexes(VECTOR_INDEX_NAME).toArray()
+    const [index] = (await chunks(db).listSearchIndexes(VECTOR_INDEX_NAME).toArray()) as {
+      status?: string
+      queryable?: boolean
+    }[]
     if (!index) return null
     return { name: VECTOR_INDEX_NAME, status: String(index.status ?? 'UNKNOWN'), queryable: !!index.queryable }
   } catch (error) {
