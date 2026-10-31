@@ -12,14 +12,15 @@ import { Body, H2, H3, Overline } from '@leafygreen-ui/typography'
 import { useToast } from '@/components/shared/toast'
 import { setupEnvironmentSchema } from '@/lib/domain/types'
 import { completeSetup } from '@/lib/demo/services'
-import { useDemoState } from '@/lib/demo/store'
+import { fetchAtlasStatus, useDemoState } from '@/lib/demo/store'
+import useSWR from 'swr'
 
 const STEPS = ['Operating mode', 'Organization', 'Capabilities', 'Review'] as const
 
 const CAPABILITIES = [
   { name: 'Metadata store', demo: 'IndexedDB (browser)', atlas: 'MongoDB Atlas cluster', available: true },
-  { name: 'Binary storage', demo: 'IndexedDB object store', atlas: 'S3 / Azure Blob / GCS / MinIO', available: true },
-  { name: 'Full-text search', demo: 'Local BM25 over real chunks', atlas: 'MongoDB Search ($search)', available: true },
+  { name: 'Binary storage', demo: 'IndexedDB object store', atlas: 'MongoDB GridFS bucket', available: true },
+  { name: 'Full-text search', demo: 'Local BM25 over real chunks', atlas: 'BM25 over chunks stored in Atlas', available: true },
   { name: 'Semantic search', demo: 'Disabled', atlas: 'Voyage AI + Atlas Vector Search', available: false },
   { name: 'Event streaming', demo: 'Transactional outbox log', atlas: 'Kafka / Confluent', available: true },
   { name: 'Malware scanning', demo: 'Not configured (step recorded as skipped)', atlas: 'ClamAV / cloud scanner', available: false },
@@ -34,6 +35,15 @@ export function SetupWizard() {
   const [form, setForm] = useState({ organization: '', adminName: '', adminEmail: '' })
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [submitting, setSubmitting] = useState(false)
+  const { data: atlas, isLoading: atlasLoading } = useSWR('atlas-status', fetchAtlasStatus, { revalidateOnFocus: false })
+  const atlasReady = !!atlas?.connected
+  const atlasText = atlasLoading
+    ? 'Checking MongoDB Atlas connection...'
+    : atlasReady
+      ? `Connected to database "${atlas.database}" (${atlas.latencyMs} ms). Metadata in Atlas collections, files in GridFS.`
+      : atlas?.configured
+        ? (atlas.error ?? 'MONGODB_URI is set but the cluster is unreachable.')
+        : 'Requires MONGODB_URI. Not configured in this deployment.'
 
   if (state.setup?.completed) {
     return (
@@ -71,8 +81,13 @@ export function SetupWizard() {
     if (!validateOrg()) return setStep(1)
     setSubmitting(true)
     try {
-      await completeSetup(form)
-      pushToast({ variant: 'success', title: 'Environment ready', description: 'Demo Mode tenant created.' })
+      const selectedMode = mode === 'atlas' && atlasReady ? 'atlas' : 'demo'
+      await completeSetup({ ...form, mode: selectedMode })
+      pushToast({
+        variant: 'success',
+        title: 'Environment ready',
+        description: selectedMode === 'atlas' ? 'Atlas Mode tenant created in MongoDB.' : 'Demo Mode tenant created.',
+      })
       router.replace('/')
     } catch (error) {
       pushToast({ variant: 'warning', title: 'Setup failed', description: (error as Error).message })
@@ -111,7 +126,7 @@ export function SetupWizard() {
               <legend className="sr-only">Operating mode</legend>
               {[
                 { value: 'demo', title: 'Demo Mode', text: 'All data and files persist in this browser via IndexedDB. No external services.', disabled: false },
-                { value: 'atlas', title: 'Atlas Mode', text: 'Requires MONGODB_URI and an object store. Not configured in this deployment.', disabled: true },
+                { value: 'atlas', title: 'Atlas Mode', text: atlasText, disabled: !atlasReady },
               ].map((opt) => (
                 <label
                   key={opt.value}

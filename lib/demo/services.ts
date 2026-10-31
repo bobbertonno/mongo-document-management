@@ -19,10 +19,14 @@ import {
   type OutboxEvent,
   type PipelineStep,
   type Role,
+  type OperatingMode,
   type SetupState,
+  type StorageProvider,
   type User,
 } from '@/lib/domain/types'
-import { commit, deleteObject, getDemoState, getObject, putObject } from './store'
+import { commit, deleteObject, getBackend, getDemoState, getObject, putObject, selectBackend } from './store'
+
+const storageProvider = (): StorageProvider => (getBackend() === 'atlas' ? 'mongodb-gridfs' : 'browser-indexeddb')
 import { newId, nowIso, sha256Hex } from './util'
 
 export class DomainError extends Error {
@@ -106,18 +110,23 @@ function defaultPolicy(classification: Classification, department: Department) {
 
 // ---------- Setup ----------
 
-export async function completeSetup(input: { organization: string; adminName: string; adminEmail: string }) {
+export async function completeSetup(input: { organization: string; adminName: string; adminEmail: string; mode?: OperatingMode }) {
+  const mode = input.mode ?? 'demo'
+  await selectBackend(mode)
+  if (getDemoState().setup?.completed) {
+    throw new DomainError('CONFLICT', 'This Atlas cluster already has a configured tenant. Reload the app to use it.')
+  }
   const tenantId = newId('tnt')
   const adminId = newId('usr')
   const correlationId = newId('corr')
   const setup: SetupState = {
     completed: true,
-    mode: 'demo',
+    mode,
     organization: input.organization,
     tenantId,
     adminName: input.adminName,
     adminEmail: input.adminEmail,
-    storageProvider: 'browser-indexeddb',
+    storageProvider: storageProvider(),
     embeddingMode: 'disabled',
     kafkaMode: 'simulator',
     completedAt: nowIso(),
@@ -145,7 +154,7 @@ export async function completeSetup(input: { organization: string; adminName: st
       result: 'success',
       correlationId,
       requestId: newId('req'),
-      after: { mode: 'demo', storageProvider: 'browser-indexeddb', embeddingMode: 'disabled', kafkaMode: 'simulator' },
+      after: { mode, storageProvider: setup.storageProvider, embeddingMode: 'disabled', kafkaMode: 'simulator' },
     })
   })
 }
@@ -223,7 +232,11 @@ async function runPipeline(input: IngestInput) {
   await track('malware_scan', () => undefined, 'No malware scanner configured in Demo Mode', 'skipped')
   const checksum = await sha256Hex(input.blob)
   const objectKey = `obj/${newId()}`
-  await track('object_storage', () => putObject(objectKey, input.blob), 'Opaque key written to browser IndexedDB object store')
+  await track(
+    'object_storage',
+    () => putObject(objectKey, input.blob),
+    getBackend() === 'atlas' ? 'Opaque key written to MongoDB GridFS bucket' : 'Opaque key written to browser IndexedDB object store',
+  )
 
   let pages: string[] | null = input.pages ?? null
   let extractionStatus: DocumentVersion['extractionStatus'] = 'succeeded'
@@ -253,7 +266,11 @@ async function runPipeline(input: IngestInput) {
     status: pages ? 'succeeded' : 'skipped',
     startedAt: nowIso(),
     durationMs: 0,
-    note: pages ? 'Indexed into local lexical index (Demo)' : 'Nothing to index',
+    note: pages
+      ? getBackend() === 'atlas'
+        ? 'Chunks stored in document_chunks; ranked by the in-app BM25 index'
+        : 'Indexed into local lexical index (Demo)'
+      : 'Nothing to index',
   })
   steps.push({ step: 'embedding', status: 'skipped', startedAt: nowIso(), durationMs: 0, note: 'Semantic search disabled (no Voyage AI configured)' })
   steps.push({ step: 'vector_indexing', status: 'skipped', startedAt: nowIso(), durationMs: 0, note: 'Requires Atlas Vector Search' })
@@ -290,7 +307,7 @@ export async function createDocument(input: CreateDocumentInput, actor = current
     tenantId: actor.tenantId,
     documentId: docId,
     versionNumber: i + 1,
-    storageProvider: 'browser-indexeddb',
+    storageProvider: storageProvider(),
     objectKey: r.objectKey,
     checksum: r.checksum,
     mimeType: sources[i].mimeType,
@@ -381,7 +398,7 @@ export async function uploadNewVersion(documentId: string, file: File, expectedC
     tenantId: actor.tenantId,
     documentId,
     versionNumber: prevCount + 1,
-    storageProvider: 'browser-indexeddb',
+    storageProvider: storageProvider(),
     objectKey: r.objectKey,
     checksum: r.checksum,
     mimeType: file.type,
