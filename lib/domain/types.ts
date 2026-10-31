@@ -41,7 +41,7 @@ export const ALLOWED_MIME_TYPES: Record<string, string[]> = {
 }
 export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 
-export type StorageProvider = 'browser-indexeddb' | 'aws-s3' | 'azure-blob' | 'gcs' | 'minio' | 'local-fs'
+export type StorageProvider = 'browser-indexeddb' | 'mongodb-gridfs' | 'aws-s3' | 'azure-blob' | 'gcs' | 'minio' | 'local-fs'
 export type OperatingMode = 'demo' | 'atlas'
 
 export interface SetupState {
