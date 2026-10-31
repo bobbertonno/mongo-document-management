@@ -1,0 +1,55 @@
+@import 'tailwindcss';
+@import '@xyflow/react/dist/style.css';
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  --adh-bg: #f9fbfa;
+  --adh-surface: #ffffff;
+  --adh-border: #e8edeb;
+  --adh-text: #001e2b;
+  --adh-muted: #5c6c75;
+  --adh-forest: #001e2b;
+  --adh-spring: #00ed64;
+  --adh-green: #00684a;
+}
+
+.dark {
+  --adh-bg: #001e2b;
+  --adh-surface: #112733;
+  --adh-border: #1c2d38;
+  --adh-text: #e8edeb;
+  --adh-muted: #889397;
+}
+
+@theme inline {
+  --color-background: var(--adh-bg);
+  --color-surface: var(--adh-surface);
+  --color-border: var(--adh-border);
+  --color-foreground: var(--adh-text);
+  --color-muted: var(--adh-muted);
+  --color-forest: var(--adh-forest);
+  --color-spring: var(--adh-spring);
+  --color-mdb-green: var(--adh-green);
+}
+
+html,
+body {
+  background: var(--adh-bg);
+  color: var(--adh-text);
+}
+
+body {
+  font-family: 'Euclid Circular A', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+}
+
+mark.adh-hl {
+  background: #c0fad6;
+  color: #001e2b;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+.react-flow__attribution {
+  display: none;
+}
