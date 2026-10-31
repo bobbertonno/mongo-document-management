@@ -19,15 +19,14 @@ import {
   type OutboxEvent,
   type PipelineStep,
   type Role,
-  type OperatingMode,
   type SetupState,
   type StorageProvider,
   type User,
 } from '@/lib/domain/types'
-import { commit, deleteObject, getBackend, getDemoState, getObject, putObject, selectBackend } from './store'
-
-const storageProvider = (): StorageProvider => (getBackend() === 'atlas' ? 'mongodb-gridfs' : 'browser-indexeddb')
+import { commit, deleteObject, getDemoState, getObject, putObject, reloadState } from './store'
 import { newId, nowIso, sha256Hex } from './util'
+
+const storageProvider = (): StorageProvider => 'mongodb-gridfs'
 
 export class DomainError extends Error {
   constructor(
@@ -110,9 +109,9 @@ function defaultPolicy(classification: Classification, department: Department) {
 
 // ---------- Setup ----------
 
-export async function completeSetup(input: { organization: string; adminName: string; adminEmail: string; mode?: OperatingMode }) {
-  const mode = input.mode ?? 'demo'
-  await selectBackend(mode)
+export async function completeSetup(input: { organization: string; adminName: string; adminEmail: string }) {
+  const mode = 'atlas' as const
+  await reloadState()
   if (getDemoState().setup?.completed) {
     throw new DomainError('CONFLICT', 'This Atlas cluster already has a configured tenant. Reload the app to use it.')
   }
@@ -229,14 +228,10 @@ async function runPipeline(input: IngestInput) {
     await sniffMagic(input.blob, input.mimeType)
   }, 'MIME, extension, size and magic-byte checks')
   await track('quarantine', () => undefined, 'Held in memory until validation completed')
-  await track('malware_scan', () => undefined, 'No malware scanner configured in Demo Mode', 'skipped')
+  await track('malware_scan', () => undefined, 'No malware scanner configured', 'skipped')
   const checksum = await sha256Hex(input.blob)
   const objectKey = `obj/${newId()}`
-  await track(
-    'object_storage',
-    () => putObject(objectKey, input.blob),
-    getBackend() === 'atlas' ? 'Opaque key written to MongoDB GridFS bucket' : 'Opaque key written to browser IndexedDB object store',
-  )
+  await track('object_storage', () => putObject(objectKey, input.blob), 'Opaque key written to MongoDB GridFS bucket')
 
   let pages: string[] | null = input.pages ?? null
   let extractionStatus: DocumentVersion['extractionStatus'] = 'succeeded'
@@ -266,11 +261,7 @@ async function runPipeline(input: IngestInput) {
     status: pages ? 'succeeded' : 'skipped',
     startedAt: nowIso(),
     durationMs: 0,
-    note: pages
-      ? getBackend() === 'atlas'
-        ? 'Chunks stored in document_chunks; ranked by the in-app BM25 index'
-        : 'Indexed into local lexical index (Demo)'
-      : 'Nothing to index',
+    note: pages ? 'Chunks stored in document_chunks; ranked by the in-app BM25 index' : 'Nothing to index',
   })
   steps.push({ step: 'embedding', status: 'skipped', startedAt: nowIso(), durationMs: 0, note: 'Semantic search disabled (no Voyage AI configured)' })
   steps.push({ step: 'vector_indexing', status: 'skipped', startedAt: nowIso(), durationMs: 0, note: 'Requires Atlas Vector Search' })

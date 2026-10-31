@@ -2,13 +2,13 @@
 
 A document management console built with Next.js 16, React 19 and MongoDB's LeafyGreen design system. It shows how a MongoDB-backed document platform would handle storage, versioning, search, auditing and event streaming.
 
-> **Current status: Demo Mode only.** No database, file storage or environment variables are configured. All data is stored in your browser (IndexedDB) and search runs locally. Atlas Mode is shown in the setup wizard but is disabled until a backend exists (see [Atlas Mode](#atlas-mode)).
+> **Current status: MongoDB Atlas only.** All documents, versions, chunks, audit events, outbox events, generation runs and settings are stored in MongoDB Atlas, and binaries are stored in GridFS. There is no local/browser database. `MONGODB_URI` must be set.
 
 ![Dashboard](docs/screenshots/dashboard.png)
 
 ## Screenshots
 
-All screenshots were taken in Demo Mode with 50 generated documents (seed 42).
+Screenshots show 50 generated documents (seed 42). They were captured before the move to Atlas-only storage, so some labels still read "Demo Mode".
 
 | | |
 | --- | --- |
@@ -19,14 +19,15 @@ All screenshots were taken in Demo Mode with 50 generated documents (seed 42).
 
 ## Getting started
 
-Requirements: Node.js 20+ and pnpm.
+Requirements: Node.js 20+, pnpm, and a MongoDB Atlas cluster (replica set, for transactions).
 
 ```bash
+echo 'MONGODB_URI="mongodb+srv://..."' > .env.local
 pnpm install
 pnpm dev
 ```
 
-Open http://localhost:3000. The first visit goes to the **Setup Wizard** (`/setup`). Finish it in Demo Mode, then use the **Document Generator** (`/generator`) to create a sample dataset.
+Optionally set `MONGODB_DB` (defaults to `document_hub`). Open http://localhost:3000. The first visit goes to the **Setup Wizard** (`/setup`), which checks the Atlas connection. Finish it, then use the **Document Generator** (`/generator`) to create a sample dataset.
 
 | Script       | Description              |
 | ------------ | ------------------------ |
@@ -73,7 +74,8 @@ components/
   shared/            Badges, toast notifications
 lib/
   domain/types.ts    Domain model (documents, versions, audit entries, events)
-  demo/store.ts      IndexedDB-backed store
+  atlas/client.ts    MongoDB client, collections and GridFS bucket (server only)
+  demo/store.ts      Client store backed by the Atlas API routes
   demo/services.ts   Document, version, audit and event logic
   demo/search.ts     Local search engine
   demo/generator.ts  Sample dataset generator
@@ -83,19 +85,16 @@ lib/
 
 ## Data and persistence
 
-- All records and uploaded files are kept in your browser's IndexedDB using `idb-keyval`.
-- Data belongs to one browser profile. Clearing site data or using another browser starts fresh.
-- **System Settings** can reset the demo data.
-- Nothing is sent to a server. Don't use Demo Mode for real or sensitive documents.
+- Records live in MongoDB Atlas collections; each mutation's changed records are written in a single transaction via `app/api/atlas/state`.
+- Uploaded and generated binaries are stored in the GridFS bucket via `app/api/atlas/objects` and re-verified by SHA-256 on read.
+- `app/api/atlas/status` reports connection health (used by the Setup Wizard and System Health).
+- **System Settings** can reset all data, which drops every collection and GridFS file.
+- If Atlas is unreachable, the app shows an error with a Retry button instead of falling back to local storage.
 
-## Atlas Mode
+## What's still client-side
 
-Atlas Mode is disabled on purpose in `components/setup/setup-wizard.tsx`. There is no server-side code for it yet. Enabling it requires:
-
-1. **MongoDB Atlas.** Connect the integration so `MONGODB_URI` is set. The `mongodb` driver is already installed.
-2. **File storage.** Vercel Blob, Amazon S3, or MongoDB GridFS (GridFS needs no extra service).
-3. **Server routes.** Route handlers or server actions that save documents, versions, audit entries and events to MongoDB, plus full-text search through MongoDB Search. Semantic search would also need embeddings (for example Voyage AI) and a vector search index.
-4. **Unlocking the option.** Allow Atlas Mode in the wizard only when `MONGODB_URI` is set.
+- Domain logic (validation, ACL checks, chunking, ranking) still runs in the browser and is persisted through the Atlas routes. These routes have no authentication yet, so don't expose a deployment with real data.
+- Search is BM25 over chunks loaded from Atlas, not Atlas Search. Atlas Search / Vector Search indexes are on the roadmap.
 
 ## Known issues
 
@@ -104,4 +103,4 @@ Atlas Mode is disabled on purpose in `components/setup/setup-wizard.tsx`. There 
 
 ## Tech stack
 
-Next.js 16 (App Router, Turbopack) · React 19 · TypeScript · LeafyGreen UI · Tailwind CSS 4 · Recharts · React Flow (`@xyflow/react`) · SWR · Zod · idb-keyval
+Next.js 16 (App Router, Turbopack) · React 19 · TypeScript · LeafyGreen UI · Tailwind CSS 4 · Recharts · React Flow (`@xyflow/react`) · SWR · Zod · MongoDB Node.js driver (GridFS)

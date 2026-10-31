@@ -1,11 +1,7 @@
 'use client'
 
-import { createStore, del, get, set } from 'idb-keyval'
 import { useSyncExternalStore } from 'react'
-import type { DemoState, OperatingMode } from '@/lib/domain/types'
-
-const STATE_KEY = 'atlas-document-hub:state:v1'
-const BACKEND_KEY = 'atlas-document-hub:backend'
+import type { DemoState } from '@/lib/domain/types'
 
 type CollectionKey = Exclude<keyof DemoState, 'schemaVersion' | 'setup'>
 const COLLECTION_ID_FIELDS: Record<CollectionKey, string> = {
@@ -33,22 +29,16 @@ const emptyState = (): DemoState => ({
   generationRuns: [],
 })
 
-let idbStore: ReturnType<typeof createStore> | null = null
-const metaStore = () => (idbStore ??= createStore('atlas-document-hub', 'records'))
-let binaryStore: ReturnType<typeof createStore> | null = null
-const blobStore = () => (binaryStore ??= createStore('atlas-document-hub-objects', 'objects'))
-
 const serverState = emptyState()
 const getServerState = () => serverState
 
 export interface StoreStatus {
   loaded: boolean
-  backend: OperatingMode
   error: string | null
 }
 
 let state: DemoState = emptyState()
-let status: StoreStatus = { loaded: false, backend: 'demo', error: null }
+let status: StoreStatus = { loaded: false, error: null }
 let loadPromise: Promise<void> | null = null
 const listeners = new Set<() => void>()
 let persistQueue: Promise<void> = Promise.resolve()
@@ -90,51 +80,29 @@ export async function fetchAtlasStatus(): Promise<AtlasStatus> {
   }
 }
 
-async function loadBackend(backend: OperatingMode) {
-  if (backend === 'atlas') {
-    state = await fetchAtlasState()
-  } else {
-    const persisted = await get<DemoState>(STATE_KEY, metaStore())
-    state = persisted && persisted.schemaVersion === 1 ? { ...emptyState(), ...persisted } : emptyState()
-  }
-}
-
+/** Loads every collection from MongoDB Atlas. Failed loads can be retried. */
 export function loadDemoState(): Promise<void> {
   if (loadPromise) return loadPromise
   loadPromise = (async () => {
     try {
-      let backend = await get<OperatingMode>(BACKEND_KEY, metaStore())
-      if (!backend) {
-        const local = await get<DemoState>(STATE_KEY, metaStore())
-        // A fresh browser joins an existing Atlas tenant instead of starting a new demo.
-        if (!local?.setup?.completed) {
-          const atlas = await fetchAtlasStatus()
-          if (atlas.connected && atlas.setupCompleted) backend = 'atlas'
-        }
-      }
-      backend ??= 'demo'
-      await loadBackend(backend)
-      setStatus({ loaded: true, backend, error: null })
+      state = await fetchAtlasState()
+      setStatus({ loaded: true, error: null })
     } catch (error) {
-      setStatus({ loaded: true, backend: 'atlas', error: (error as Error).message })
+      loadPromise = null
+      setStatus({ loaded: true, error: (error as Error).message })
     }
   })()
   return loadPromise
 }
 
-/** Selects the persistence engine before setup runs. Atlas Mode starts from the cluster's current data. */
-export async function selectBackend(backend: OperatingMode): Promise<void> {
-  await loadBackend(backend)
-  await set(BACKEND_KEY, backend, metaStore())
-  setStatus({ backend, error: null })
+/** Re-reads the cluster so decisions (e.g. setup) are made against current data. */
+export async function reloadState(): Promise<void> {
+  state = await fetchAtlasState()
+  setStatus({ error: null })
 }
 
 export function getDemoState(): DemoState {
   return state
-}
-
-export function getBackend(): OperatingMode {
-  return status.backend
 }
 
 function diffState(prev: DemoState, next: DemoState) {
@@ -173,9 +141,8 @@ async function persistToAtlas(changes: ReturnType<typeof diffState>) {
 }
 
 /**
- * Applies a mutation as a single unit: the document change, its audit event and
- * its outbox event are committed together. In Atlas Mode the changed records are
- * written in one MongoDB transaction; in Demo Mode the snapshot goes to IndexedDB.
+ * Applies a mutation as a single unit: the changed records (document, audit event,
+ * outbox event, ...) are written to MongoDB Atlas in one transaction.
  */
 export async function commit(mutator: (draft: DemoState) => void): Promise<void> {
   const previous = state
@@ -183,70 +150,46 @@ export async function commit(mutator: (draft: DemoState) => void): Promise<void>
   mutator(draft)
   state = draft
   emit()
-  if (status.backend === 'atlas') {
-    const changes = diffState(previous, draft)
-    const write = persistQueue.then(() => persistToAtlas(changes))
-    persistQueue = write.catch(() => undefined)
-    try {
-      await write
-    } catch (error) {
-      // Re-sync with the cluster so the UI never shows records that failed to persist.
-      state = await fetchAtlasState().catch(() => previous)
-      emit()
-      throw error
-    }
-    return
+  const changes = diffState(previous, draft)
+  const write = persistQueue.then(() => persistToAtlas(changes))
+  persistQueue = write.catch(() => undefined)
+  try {
+    await write
+  } catch (error) {
+    // Re-sync with the cluster so the UI never shows records that failed to persist.
+    state = await fetchAtlasState().catch(() => previous)
+    emit()
+    throw error
   }
-  const snapshot = state
-  persistQueue = persistQueue.then(() => set(STATE_KEY, snapshot, metaStore()))
-  await persistQueue
 }
 
 export async function resetDemoState(): Promise<void> {
-  if (status.backend === 'atlas') {
-    await readJson(await fetch('/api/atlas/state', { method: 'DELETE' }))
-  } else {
-    await set(STATE_KEY, emptyState(), metaStore())
-    const { clear } = await import('idb-keyval')
-    await clear(blobStore())
-  }
-  await del(BACKEND_KEY, metaStore())
+  await readJson(await fetch('/api/atlas/state', { method: 'DELETE' }))
   state = emptyState()
-  setStatus({ backend: 'demo', error: null })
+  setStatus({ error: null })
 }
 
 const objectUrl = (objectKey: string) => `/api/atlas/objects?key=${encodeURIComponent(objectKey)}`
 
 export async function putObject(objectKey: string, blob: Blob): Promise<void> {
-  if (status.backend === 'atlas') {
-    await readJson(
-      await fetch(objectUrl(objectKey), {
-        method: 'PUT',
-        headers: { 'content-type': blob.type || 'application/octet-stream' },
-        body: blob,
-      }),
-    )
-    return
-  }
-  await set(objectKey, blob, blobStore())
+  await readJson(
+    await fetch(objectUrl(objectKey), {
+      method: 'PUT',
+      headers: { 'content-type': blob.type || 'application/octet-stream' },
+      body: blob,
+    }),
+  )
 }
 
 export async function getObject(objectKey: string): Promise<Blob | undefined> {
-  if (status.backend === 'atlas') {
-    const response = await fetch(objectUrl(objectKey), { cache: 'no-store' })
-    if (response.status === 404) return undefined
-    if (!response.ok) await readJson(response)
-    return response.blob()
-  }
-  return get<Blob>(objectKey, blobStore())
+  const response = await fetch(objectUrl(objectKey), { cache: 'no-store' })
+  if (response.status === 404) return undefined
+  if (!response.ok) await readJson(response)
+  return response.blob()
 }
 
 export async function deleteObject(objectKey: string): Promise<void> {
-  if (status.backend === 'atlas') {
-    await readJson(await fetch(objectUrl(objectKey), { method: 'DELETE' }))
-    return
-  }
-  await del(objectKey, blobStore())
+  await readJson(await fetch(objectUrl(objectKey), { method: 'DELETE' }))
 }
 
 function subscribe(listener: () => void) {
@@ -258,7 +201,7 @@ export function useDemoState(): DemoState {
   return useSyncExternalStore(subscribe, getDemoState, getServerState)
 }
 
-const serverStatus: StoreStatus = { loaded: false, backend: 'demo', error: null }
+const serverStatus: StoreStatus = { loaded: false, error: null }
 
 export function useStoreStatus(): StoreStatus {
   return useSyncExternalStore(

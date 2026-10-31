@@ -172,7 +172,7 @@ export function DocumentLibrary() {
         </div>
       </Card>
       <div className="mt-3">
-        <EngineNote>Authorization filter applied before pagination. Demo engine: in-memory query over IndexedDB records.</EngineNote>
+        <EngineNote>Authorization filter applied before pagination. Engine: query over records loaded from MongoDB Atlas.</EngineNote>
       </div>
     </>
   )

@@ -132,7 +132,7 @@ export function Dashboard() {
         )}
       </Card>
       <div className="mt-4">
-        <EngineNote>Counts computed from browser-persisted Demo Mode collections.</EngineNote>
+        <EngineNote>Counts computed from collections stored in MongoDB Atlas.</EngineNote>
       </div>
     </>
   )

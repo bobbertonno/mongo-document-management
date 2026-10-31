@@ -347,7 +347,7 @@ export function DocumentDetail({ id }: { id: string }) {
         </Tab>
       </Tabs>
       <div className="mt-3">
-        <EngineNote>Optimistic concurrency enforced on every mutation. Demo engine: IndexedDB.</EngineNote>
+        <EngineNote>Optimistic concurrency enforced on every mutation. Engine: MongoDB Atlas transactions.</EngineNote>
       </div>
     </>
   )

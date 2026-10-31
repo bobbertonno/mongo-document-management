@@ -4,7 +4,8 @@ import Card from '@leafygreen-ui/card'
 import Badge from '@leafygreen-ui/badge'
 import { Body, H3 } from '@leafygreen-ui/typography'
 import { PageHeader } from '@/components/shell/page-header'
-import { useDemoState } from '@/lib/demo/store'
+import useSWR from 'swr'
+import { fetchAtlasStatus, useDemoState } from '@/lib/demo/store'
 
 type Health = 'healthy' | 'degraded' | 'not configured'
 const VARIANT: Record<Health, 'green' | 'yellow' | 'lightgray'> = { healthy: 'green', degraded: 'yellow', 'not configured': 'lightgray' }
@@ -15,25 +16,28 @@ export function SystemHealth() {
   const failedRuns = s.generationRuns.filter((r) => r.status === 'failed').length
   const unindexed = s.documentVersions.filter((v) => v.pipeline.some((p) => p.step === 'search_indexing' && p.status !== 'succeeded')).length
 
-  const atlas = s.setup?.mode === 'atlas'
+  const { data: atlas } = useSWR('atlas-status', fetchAtlasStatus, { refreshInterval: 30000 })
+  const atlasHealth: Health = !atlas ? 'degraded' : atlas.connected ? 'healthy' : atlas.configured ? 'degraded' : 'not configured'
   const components: { name: string; status: Health; detail: string }[] = [
     {
       name: 'Metadata store',
-      status: 'healthy',
-      detail: `${atlas ? 'MongoDB Atlas' : 'IndexedDB'} - ${s.documents.length} documents, ${s.documentVersions.length} versions`,
+      status: atlasHealth,
+      detail: `MongoDB Atlas - ${s.documents.length} documents, ${s.documentVersions.length} versions`,
     },
-    {
-      name: 'Object storage',
-      status: 'healthy',
-      detail: atlas ? 'MongoDB GridFS bucket with checksum verification' : 'IndexedDB object store with checksum verification',
-    },
+    { name: 'Object storage', status: atlasHealth, detail: 'MongoDB GridFS bucket with checksum verification' },
     { name: 'Search index', status: unindexed ? 'degraded' : 'healthy', detail: `${s.documentChunks.length} chunks indexed, ${unindexed} versions not indexed` },
     { name: 'Embeddings', status: 'not configured', detail: 'Semantic search unavailable until a provider is configured' },
     { name: 'Event streaming', status: 'not configured', detail: `${pending} outbox events pending publication` },
     { name: 'Generator workers', status: failedRuns ? 'degraded' : 'healthy', detail: `${s.generationRuns.length} runs, ${failedRuns} failed` },
-    atlas
-      ? { name: 'MongoDB Atlas', status: 'healthy', detail: 'Connected - transactional commits across collections' }
-      : { name: 'MongoDB Atlas', status: 'not configured', detail: 'Running in Demo Mode' },
+    {
+      name: 'MongoDB Atlas',
+      status: atlasHealth,
+      detail: !atlas
+        ? 'Checking connection...'
+        : atlas.connected
+          ? `Connected to "${atlas.database}" (${atlas.latencyMs} ms) - transactional commits across collections`
+          : (atlas.error ?? 'Cluster unreachable'),
+    },
   ]
 
   return (

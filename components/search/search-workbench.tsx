@@ -204,7 +204,7 @@ export function SearchWorkbench() {
         </div>
       )}
       <div className="mt-4">
-        <EngineNote>Demo engine: local lexical index. ACL filtering runs before ranking and limiting. Every search is audited.</EngineNote>
+        <EngineNote>Engine: BM25 over chunks stored in MongoDB Atlas. ACL filtering runs before ranking and limiting. Every search is audited.</EngineNote>
       </div>
     </>
   )
