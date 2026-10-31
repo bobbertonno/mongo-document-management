@@ -22,7 +22,19 @@ function wrap(text: string): string[] {
   return lines
 }
 
-const escapePdf = (s: string) => s.replace(/[^\x20-\x7e]/g, '?').replace(/([\\()])/g, '\\$1')
+const WIN_ANSI_EXTRAS: Record<string, number> = { '\u2018': 0x91, '\u2019': 0x92, '\u201c': 0x93, '\u201d': 0x94, '\u2013': 0x96, '\u2014': 0x97, '\u20ac': 0x80 }
+
+/** Escapes text for a WinAnsi-encoded Helvetica string so Latin accents (à, é, ñ, ç...) render correctly. */
+const escapePdf = (s: string) =>
+  Array.from(s)
+    .map((ch) => {
+      if (ch === '\\' || ch === '(' || ch === ')') return `\\${ch}`
+      const code = ch.charCodeAt(0)
+      if (code >= 0x20 && code <= 0x7e) return ch
+      const byte = code >= 0xa0 && code <= 0xff ? code : WIN_ANSI_EXTRAS[ch]
+      return byte ? `\\${byte.toString(8).padStart(3, '0')}` : '?'
+    })
+    .join('')
 
 /** Splits text into pages exactly as the PDF renderer will lay them out. */
 export function paginate(text: string): string[] {
@@ -43,7 +55,7 @@ export function buildPdf(title: string, pages: string[]): Blob {
   objects[1] = '<< /Type /Catalog /Pages 2 0 R >>'
   const kids = pages.map((_, i) => `${firstPageObj + i * 2} 0 R`).join(' ')
   objects[2] = `<< /Type /Pages /Kids [${kids}] /Count ${pageCount} >>`
-  objects[fontObj] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'
+  objects[fontObj] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>'
 
   pages.forEach((pageText, i) => {
     const pageObj = firstPageObj + i * 2
