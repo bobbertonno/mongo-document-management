@@ -5,6 +5,7 @@ import {
   ATLAS_FEATURES,
   activeAdminCount,
   customRoles,
+  describeMongoError,
   ensureDirectory,
   loadUser,
   newDirectoryId,
@@ -46,7 +47,7 @@ function handle(error: unknown) {
   if (code === 11000) return fail('That email or role name is already in use', 409)
   if (code === 121) return fail('Atlas rejected the document: it does not match the collection schema', 400)
   console.error('[directory] request failed', error)
-  return fail('Directory request failed', 502)
+  return fail(`Directory request failed (${describeMongoError(error)})`, 502)
 }
 
 export async function GET(request: NextRequest) {
