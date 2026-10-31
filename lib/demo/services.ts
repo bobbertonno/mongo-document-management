@@ -165,25 +165,27 @@ export async function completeSetup(input: {
   })
 }
 
-/** Switches an existing tenant to Voyage AI embeddings after the vector index was initialized. */
-export async function enableVectorSearch(actor = currentActor()) {
-  if (getDemoState().setup?.embeddingMode === 'voyage') return
+/** Records which embedding mode the tenant uses after the vector index was (re)configured. */
+export async function enableVectorSearch(mode: 'automated' | 'custom', details: { provider: string; model: string }, actor = currentActor()) {
   await commit((draft) => {
     if (!draft.setup) throw new DomainError('CONFLICT', 'Complete setup first')
     const before = draft.setup.embeddingMode
-    draft.setup.embeddingMode = 'voyage'
+    draft.setup.embeddingMode = mode
     audit(draft, actor, {
-      action: 'settings.embedding_enabled',
+      action: 'settings.embedding_configured',
       resourceType: 'system_settings',
       resourceId: draft.setup.tenantId,
       result: 'success',
       before: { embeddingMode: before },
-      after: { embeddingMode: 'voyage' },
+      after: { embeddingMode: mode, ...details },
     })
   })
 }
 
-const vectorEnabled = () => getDemoState().setup?.embeddingMode === 'voyage'
+const vectorEnabled = () => {
+  const mode = getDemoState().setup?.embeddingMode
+  return !!mode && mode !== 'disabled'
+}
 
 /**
  * Embeds freshly committed chunks with Voyage AI (server side) and records the outcome on
@@ -201,8 +203,13 @@ async function embedCommittedChunks(versionIds: string[], chunkIds: string[]) {
     const result = await embedChunks(chunkIds)
     model = result.model
     const durationMs = Math.round(performance.now() - t0)
-    embedding = { step: 'embedding', status: 'succeeded', startedAt, durationMs, note: `${result.embedded} chunk(s) embedded with ${result.model} (${result.tokens} tokens)` }
-    vectorIndexing = { step: 'vector_indexing', status: 'succeeded', startedAt: nowIso(), durationMs: 0, note: 'Vectors written to document_chunks.embedding (Atlas Vector Search)' }
+    if (result.automated) {
+      embedding = { step: 'embedding', status: 'succeeded', startedAt, durationMs, note: `Delegated to MongoDB Atlas automated embedding (${result.model})` }
+      vectorIndexing = { step: 'vector_indexing', status: 'succeeded', startedAt: nowIso(), durationMs: 0, note: 'Atlas embeds document_chunks.text into the vector index asynchronously' }
+    } else {
+      embedding = { step: 'embedding', status: 'succeeded', startedAt, durationMs, note: `${result.embedded} chunk(s) embedded with ${result.model} (${result.tokens} tokens)` }
+      vectorIndexing = { step: 'vector_indexing', status: 'succeeded', startedAt: nowIso(), durationMs: 0, note: 'Vectors written to document_chunks.embedding (Atlas Vector Search)' }
+    }
   } catch (error) {
     const durationMs = Math.round(performance.now() - t0)
     embedding = { step: 'embedding', status: 'failed', startedAt, durationMs, note: (error as Error).message }

@@ -1,11 +1,14 @@
-import { NextResponse } from 'next/server'
+import { NextResponse, type NextRequest } from 'next/server'
 import { getDb, isAtlasConfigured } from '@/lib/atlas/client'
-import { ensureVectorIndex, getVectorStatus } from '@/lib/atlas/vector'
-import { EMBEDDING_DIMENSIONS, VoyageError, embedTexts, isVoyageConfigured } from '@/lib/atlas/voyage'
+import { EmbeddingError, buildEmbeddingConfig, embedTexts, loadEmbeddingConfig, saveEmbeddingConfig } from '@/lib/atlas/embeddings'
+import { isEncryptionConfigured } from '@/lib/atlas/secrets'
+import { applyVectorIndex, getVectorStatus } from '@/lib/atlas/vector'
+import type { EmbeddingConfigInput, EmbeddingProviderId } from '@/lib/domain/embedding'
 
 export const dynamic = 'force-dynamic'
 
 const notConfigured = () => NextResponse.json({ error: 'MongoDB Atlas is not configured' }, { status: 503 })
+const PROVIDERS: EmbeddingProviderId[] = ['atlas-auto', 'voyage', 'openai']
 
 export async function GET() {
   if (!isAtlasConfigured()) return notConfigured()
@@ -17,30 +20,53 @@ export async function GET() {
   }
 }
 
-/** Verifies the Voyage AI key and creates the Atlas Vector Search index on document_chunks. */
-export async function POST() {
+function parseInput(body: unknown): EmbeddingConfigInput | null {
+  if (typeof body !== 'object' || body === null) return null
+  const { provider, model, apiKey } = body as Record<string, unknown>
+  if (typeof provider !== 'string' || !PROVIDERS.includes(provider as EmbeddingProviderId)) return null
+  if (typeof model !== 'string' || !model) return null
+  if (apiKey !== undefined && typeof apiKey !== 'string') return null
+  return { provider: provider as EmbeddingProviderId, model, apiKey }
+}
+
+/**
+ * Saves the embedding provider (API keys are encrypted at rest and never returned), verifies
+ * custom keys with a live call, and creates the matching Atlas Vector Search index.
+ */
+export async function POST(request: NextRequest) {
   if (!isAtlasConfigured()) return notConfigured()
-  if (!isVoyageConfigured()) {
-    return NextResponse.json({ error: 'VOYAGE_API_KEY is not configured in the project environment variables' }, { status: 503 })
+  const input = parseInput(await request.json().catch(() => null))
+  if (!input) return NextResponse.json({ error: 'Invalid embedding configuration' }, { status: 400 })
+  if (input.provider !== 'atlas-auto' && !isEncryptionConfigured()) {
+    return NextResponse.json(
+      { error: 'SETTINGS_ENCRYPTION_KEY is not set, so API keys cannot be stored securely. Use Atlas automated embedding or add the variable.' },
+      { status: 503 },
+    )
   }
+
+  const db = await getDb()
+  let built: ReturnType<typeof buildEmbeddingConfig>
   try {
-    const { embeddings } = await embedTexts(['Atlas Document Hub connectivity check'], 'query')
-    if (embeddings[0]?.length !== EMBEDDING_DIMENSIONS) {
-      return NextResponse.json({ error: `Voyage AI returned ${embeddings[0]?.length ?? 0} dimensions, expected ${EMBEDDING_DIMENSIONS}` }, { status: 502 })
+    built = buildEmbeddingConfig(input, await loadEmbeddingConfig(db))
+    if (built.apiKey) {
+      const { embeddings } = await embedTexts(built.config, built.apiKey, ['Atlas Document Hub connectivity check'], 'query')
+      if (embeddings[0]?.length !== built.config.dimensions) {
+        throw new EmbeddingError(`The model returned ${embeddings[0]?.length ?? 0} dimensions, expected ${built.config.dimensions}`, 502)
+      }
     }
   } catch (error) {
-    const status = error instanceof VoyageError ? error.status : 502
-    return NextResponse.json({ error: (error as Error).message }, { status })
+    const status = error instanceof EmbeddingError ? error.status : 500
+    if (status === 500) console.error('[vector] config validation failed', error)
+    return NextResponse.json({ error: status === 500 ? 'Could not validate the embedding configuration' : (error as Error).message }, { status })
   }
+
   try {
-    const db = await getDb()
-    await ensureVectorIndex(db)
+    await applyVectorIndex(db, built.config)
+    await saveEmbeddingConfig(db, built.config)
     return NextResponse.json(await getVectorStatus(db))
   } catch (error) {
     console.error('[vector] index creation failed', error)
-    return NextResponse.json(
-      { error: `Could not create the Atlas Vector Search index: ${(error as Error).message}` },
-      { status: 502 },
-    )
+    const hint = input.provider === 'atlas-auto' ? ' Automated embedding requires a cluster where Atlas auto-embedding is available.' : ''
+    return NextResponse.json({ error: `Could not create the Atlas Vector Search index: ${(error as Error).message}.${hint}` }, { status: 502 })
   }
 }
