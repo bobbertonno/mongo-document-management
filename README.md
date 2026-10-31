@@ -4,6 +4,19 @@ A document management console built with Next.js 16, React 19 and MongoDB's Leaf
 
 > **Current status: Demo Mode only.** No database, file storage or environment variables are configured. All data is stored in your browser (IndexedDB) and search runs locally. Atlas Mode is shown in the setup wizard but is disabled until a backend exists (see [Atlas Mode](#atlas-mode)).
 
+![Dashboard](docs/screenshots/dashboard.png)
+
+## Screenshots
+
+All screenshots were taken in Demo Mode with 50 generated documents (seed 42).
+
+| | |
+| --- | --- |
+| **Setup Wizard**<br>![Setup Wizard](docs/screenshots/setup.png) | **Document Library**<br>![Document Library](docs/screenshots/documents.png) |
+| **Document Detail**<br>![Document Detail](docs/screenshots/document-detail.png) | **Intelligent Search**<br>![Intelligent Search](docs/screenshots/search.png) |
+| **Document Generator**<br>![Document Generator](docs/screenshots/generator.png) | **Audit Explorer**<br>![Audit Explorer](docs/screenshots/audit.png) |
+| **Architecture Overview**<br>![Architecture Overview](docs/screenshots/architecture.png) | |
+
 ## Getting started
 
 Requirements: Node.js 20+ and pnpm.
