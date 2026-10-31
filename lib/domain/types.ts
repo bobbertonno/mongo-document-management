@@ -151,8 +151,8 @@ export interface DocumentChunk {
   pageNumber: number
   text: string
   effectiveAccessTokens: string[]
-  embeddingModel: null
-  embeddingVersion: null
+  embeddingModel: string | null
+  embeddingVersion: number | null
   indexingStatus: 'indexed'
 }
 

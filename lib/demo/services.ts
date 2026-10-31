@@ -25,6 +25,7 @@ import {
 } from '@/lib/domain/types'
 import { commit, deleteObject, getDemoState, getObject, putObject, reloadState } from './store'
 import { newId, nowIso, sha256Hex } from './util'
+import { embedChunks } from './vector'
 
 const storageProvider = (): StorageProvider => 'mongodb-gridfs'
 
@@ -109,7 +110,13 @@ function defaultPolicy(classification: Classification, department: Department) {
 
 // ---------- Setup ----------
 
-export async function completeSetup(input: { organization: string; adminName: string; adminEmail: string }) {
+export async function completeSetup(input: {
+  organization: string
+  adminName: string
+  adminEmail: string
+  embeddingMode?: SetupState['embeddingMode']
+}) {
+  const embeddingMode = input.embeddingMode ?? 'disabled'
   const mode = 'atlas' as const
   await reloadState()
   if (getDemoState().setup?.completed) {
@@ -126,7 +133,7 @@ export async function completeSetup(input: { organization: string; adminName: st
     adminName: input.adminName,
     adminEmail: input.adminEmail,
     storageProvider: storageProvider(),
-    embeddingMode: 'disabled',
+    embeddingMode,
     kafkaMode: 'simulator',
     completedAt: nowIso(),
   }
@@ -153,8 +160,64 @@ export async function completeSetup(input: { organization: string; adminName: st
       result: 'success',
       correlationId,
       requestId: newId('req'),
-      after: { mode, storageProvider: setup.storageProvider, embeddingMode: 'disabled', kafkaMode: 'simulator' },
+      after: { mode, storageProvider: setup.storageProvider, embeddingMode, kafkaMode: 'simulator' },
     })
+  })
+}
+
+/** Switches an existing tenant to Voyage AI embeddings after the vector index was initialized. */
+export async function enableVectorSearch(actor = currentActor()) {
+  if (getDemoState().setup?.embeddingMode === 'voyage') return
+  await commit((draft) => {
+    if (!draft.setup) throw new DomainError('CONFLICT', 'Complete setup first')
+    const before = draft.setup.embeddingMode
+    draft.setup.embeddingMode = 'voyage'
+    audit(draft, actor, {
+      action: 'settings.embedding_enabled',
+      resourceType: 'system_settings',
+      resourceId: draft.setup.tenantId,
+      result: 'success',
+      before: { embeddingMode: before },
+      after: { embeddingMode: 'voyage' },
+    })
+  })
+}
+
+const vectorEnabled = () => getDemoState().setup?.embeddingMode === 'voyage'
+
+/**
+ * Embeds freshly committed chunks with Voyage AI (server side) and records the outcome on
+ * each version's pipeline. Failures are non-fatal: chunks stay lexically searchable and can
+ * be backfilled from System Settings.
+ */
+async function embedCommittedChunks(versionIds: string[], chunkIds: string[]) {
+  if (!vectorEnabled() || !chunkIds.length) return
+  const startedAt = nowIso()
+  const t0 = performance.now()
+  let embedding: PipelineStep
+  let vectorIndexing: PipelineStep
+  let model: string | null = null
+  try {
+    const result = await embedChunks(chunkIds)
+    model = result.model
+    const durationMs = Math.round(performance.now() - t0)
+    embedding = { step: 'embedding', status: 'succeeded', startedAt, durationMs, note: `${result.embedded} chunk(s) embedded with ${result.model} (${result.tokens} tokens)` }
+    vectorIndexing = { step: 'vector_indexing', status: 'succeeded', startedAt: nowIso(), durationMs: 0, note: 'Vectors written to document_chunks.embedding (Atlas Vector Search)' }
+  } catch (error) {
+    const durationMs = Math.round(performance.now() - t0)
+    embedding = { step: 'embedding', status: 'failed', startedAt, durationMs, note: (error as Error).message }
+    vectorIndexing = { step: 'vector_indexing', status: 'skipped', startedAt: nowIso(), durationMs: 0, note: 'Pending backfill from System Settings' }
+  }
+  const versionSet = new Set(versionIds)
+  const chunkSet = new Set(chunkIds)
+  await commit((draft) => {
+    for (const v of draft.documentVersions) {
+      if (!versionSet.has(v._id)) continue
+      v.pipeline = v.pipeline.map((s) => (s.step === 'embedding' ? embedding : s.step === 'vector_indexing' ? vectorIndexing : s))
+    }
+    if (model) {
+      for (const c of draft.documentChunks) if (chunkSet.has(c._id)) c.embeddingModel = model
+    }
   })
 }
 
@@ -263,8 +326,15 @@ async function runPipeline(input: IngestInput) {
     durationMs: 0,
     note: pages ? 'Chunks stored in document_chunks; ranked by the in-app BM25 index' : 'Nothing to index',
   })
-  steps.push({ step: 'embedding', status: 'skipped', startedAt: nowIso(), durationMs: 0, note: 'Semantic search disabled (no Voyage AI configured)' })
-  steps.push({ step: 'vector_indexing', status: 'skipped', startedAt: nowIso(), durationMs: 0, note: 'Requires Atlas Vector Search' })
+  const willEmbed = vectorEnabled() && !!pages
+  steps.push({
+    step: 'embedding',
+    status: 'skipped',
+    startedAt: nowIso(),
+    durationMs: 0,
+    note: willEmbed ? 'Queued: Voyage AI embeds chunks after the metadata commit' : vectorEnabled() ? 'Nothing to embed' : 'Vector search not initialized (Setup Wizard / System Settings)',
+  })
+  steps.push({ step: 'vector_indexing', status: 'skipped', startedAt: nowIso(), durationMs: 0, note: willEmbed ? 'Queued' : 'Requires Atlas Vector Search' })
   steps.push({ step: 'ready', status: 'succeeded', startedAt: nowIso(), durationMs: 0 })
   return { steps, checksum, objectKey, chunks, extractionStatus }
 }
@@ -367,6 +437,10 @@ export async function createDocument(input: CreateDocumentInput, actor = current
     outbox(draft, actor, 'document.uploaded', docId, { documentId: docId, versionId: current._id, mimeType: current.mimeType })
     if (chunks.length) outbox(draft, actor, 'document.indexed', docId, { documentId: docId, chunks: chunks.length })
   })
+  await embedCommittedChunks(
+    versions.map((v) => v._id),
+    chunks.map((c) => c._id),
+  )
   return doc
 }
 
@@ -402,12 +476,7 @@ export async function uploadNewVersion(documentId: string, file: File, expectedC
     createdAt: nowIso(),
   }
   const tokens = accessTokensFor(doc)
-  await commit((draft) => {
-    const target = draft.documents.find((d) => d._id === documentId)!
-    if (target.concurrencyVersion !== expectedConcurrency) throw new DomainError('CONFLICT', 'Concurrent modification detected')
-    draft.documentVersions.push(version)
-    draft.documentChunks.push(
-      ...r.chunks.map((c, i) => ({
+  const newChunks: DocumentChunk[] = r.chunks.map((c, i) => ({
         _id: newId('chk'),
         tenantId: actor.tenantId,
         documentId,
@@ -419,8 +488,12 @@ export async function uploadNewVersion(documentId: string, file: File, expectedC
         embeddingModel: null,
         embeddingVersion: null,
         indexingStatus: 'indexed' as const,
-      })),
-    )
+      }))
+  await commit((draft) => {
+    const target = draft.documents.find((d) => d._id === documentId)!
+    if (target.concurrencyVersion !== expectedConcurrency) throw new DomainError('CONFLICT', 'Concurrent modification detected')
+    draft.documentVersions.push(version)
+    draft.documentChunks.push(...newChunks)
     target.currentVersionId = version._id
     target.updatedAt = nowIso()
     target.concurrencyVersion += 1
@@ -433,6 +506,10 @@ export async function uploadNewVersion(documentId: string, file: File, expectedC
     })
     outbox(draft, actor, 'document.updated', documentId, { documentId, versionId: version._id, change: 'new_version' })
   })
+  await embedCommittedChunks(
+    [version._id],
+    newChunks.map((c) => c._id),
+  )
 }
 
 export async function updateMetadata(documentId: string, patch: DocumentMetadataPatch, expectedConcurrency: number, actor = currentActor()) {

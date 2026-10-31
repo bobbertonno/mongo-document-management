@@ -24,7 +24,8 @@ export async function GET() {
     const entries = await Promise.all(
       COLLECTION_KEYS.map(async (key) => {
         const { name, idField } = COLLECTIONS[key]
-        const projection = idField === '_id' ? {} : { _id: 0 }
+        const projection: Record<string, 0> = idField === '_id' ? {} : { _id: 0 }
+        if (key === 'documentChunks') projection.embedding = 0
         const docs = await db.collection(name).find({}, { projection }).toArray()
         return [key, docs] as const
       }),
@@ -75,7 +76,13 @@ export async function POST(request: NextRequest) {
       const id = isRecord(record) ? record[idField] : undefined
       if (typeof id !== 'string' || !id) return NextResponse.json({ error: `Record in ${key} is missing ${idField}` }, { status: 400 })
       const { _id: _ignored, ...rest } = record
-      ops.push({ replaceOne: { filter: { _id: id as never }, replacement: rest, upsert: true } })
+      if (key === 'documentChunks') {
+        // Embedding fields are owned by the server-side Voyage pipeline; never let client commits overwrite them.
+        const { embedding: _e, embeddingModel: _m, embeddingVersion: _v, ...fields } = rest
+        ops.push({ updateOne: { filter: { _id: id as never }, update: { $set: fields }, upsert: true } })
+      } else {
+        ops.push({ replaceOne: { filter: { _id: id as never }, replacement: rest, upsert: true } })
+      }
     }
     for (const id of deletes) {
       if (typeof id !== 'string' || !id) return NextResponse.json({ error: `Invalid id in ${key} deletes` }, { status: 400 })
