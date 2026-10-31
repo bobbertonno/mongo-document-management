@@ -200,6 +200,8 @@ export interface GenerationRun {
   formats: ('txt' | 'pdf')[]
   departments: Department[]
   maxVersions: number
+  /** Content language; runs created before this field existed are English. */
+  language?: 'en' | 'it' | 'es' | 'fr'
   status: 'running' | 'paused' | 'cancelled' | 'completed' | 'failed'
   error?: string
   checkpoint: number

@@ -7,6 +7,8 @@ import Banner from '@leafygreen-ui/banner'
 import Badge from '@leafygreen-ui/badge'
 import Checkbox from '@leafygreen-ui/checkbox'
 import TextInput from '@leafygreen-ui/text-input'
+import { Option, Select } from '@leafygreen-ui/select'
+import { GENERATOR_LANGUAGES, LANGUAGE_LABELS, type GeneratorLanguage } from '@/lib/demo/generator-locales'
 import { Body, H3 } from '@leafygreen-ui/typography'
 import { useToast } from '@/components/shared/toast'
 import { PageHeader } from '@/components/shell/page-header'
@@ -33,6 +35,7 @@ export function GeneratorConsole() {
   const [maxVersions, setMaxVersions] = useState('3')
   const [departments, setDepartments] = useState<Department[]>([...DEPARTMENTS])
   const [formats, setFormats] = useState<('txt' | 'pdf')[]>(['txt', 'pdf'])
+  const [language, setLanguage] = useState<GeneratorLanguage>('en')
   const [error, setError] = useState<string | null>(null)
 
   const runs = [...state.generationRuns].reverse()
@@ -48,7 +51,7 @@ export function GeneratorConsole() {
     if (!formats.length) return setError('Select at least one format')
     setError(null)
     try {
-      const run = await createGenerationRun({ target: t, seed: s, departments, formats, maxVersions: mv })
+      const run = await createGenerationRun({ target: t, seed: s, departments, formats, maxVersions: mv, language })
       void executeRun(run._id)
     } catch (e) {
       setError((e as Error).message)
@@ -68,6 +71,19 @@ export function GeneratorConsole() {
             <TextInput label="Seed" type="number" value={seed} onChange={(e) => setSeed(e.target.value)} />
             <TextInput label="Max versions" type="number" value={maxVersions} onChange={(e) => setMaxVersions(e.target.value)} />
           </div>
+          <Select
+            label="Language"
+            description="Language used for document titles, descriptions and content."
+            value={language}
+            allowDeselect={false}
+            onChange={(v) => setLanguage(v as GeneratorLanguage)}
+          >
+            {GENERATOR_LANGUAGES.map((l) => (
+              <Option key={l} value={l}>
+                {LANGUAGE_LABELS[l]}
+              </Option>
+            ))}
+          </Select>
           <fieldset className="flex flex-col gap-2">
             <legend className="mb-1 text-sm font-semibold">Formats</legend>
             <div className="flex gap-4">
@@ -156,7 +172,7 @@ export function GeneratorConsole() {
                       <div className="h-full bg-mdb-green transition-all" style={{ width: `${pct}%` }} />
                     </div>
                     <span className="text-xs text-muted">
-                      {r.completed} / {r.target} documents ({docs} stored) - {r.formats.join(', ')} - up to {r.maxVersions} versions
+                      {r.completed} / {r.target} documents ({docs} stored) - {r.formats.join(', ')} - {LANGUAGE_LABELS[r.language ?? 'en']} - up to {r.maxVersions} versions
                       {r.error && <span className="text-[#db3030]"> - {r.error}</span>}
                     </span>
                   </li>

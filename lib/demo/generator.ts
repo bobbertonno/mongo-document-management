@@ -1,6 +1,7 @@
 'use client'
 
 import { CLASSIFICATIONS, DOCUMENT_TYPES, type Department, type DocumentType, type GenerationRun } from '@/lib/domain/types'
+import { LOCALE_PACKS, type GeneratorLanguage, type LocalePack } from './generator-locales'
 import { buildPdf, paginate } from './pdf'
 import { createDocument, currentActor } from './services'
 import { commit, getDemoState } from './store'
@@ -8,52 +9,35 @@ import { mulberry32, newId, nowIso, pick } from './util'
 
 const COMPANIES = ['Northwind Logistics', 'Contoso Health', 'Fabrikam Robotics', 'Tailspin Aviation', 'Woodgrove Capital', 'Litware Systems', 'Adatum Energy', 'Proseware Media']
 const PEOPLE = ['Avery Chen', 'Jordan Patel', 'Morgan Silva', 'Riley Okafor', 'Casey Novak', 'Quinn Ramirez', 'Taylor Brooks', 'Sam Lindqvist']
-const TOPICS: Record<Department, string[]> = {
-  HR: ['remote work eligibility', 'parental leave', 'performance review cadence', 'employee onboarding', 'workplace conduct'],
-  Legal: ['data processing addendum', 'intellectual property assignment', 'limitation of liability', 'non-disclosure obligations', 'dispute resolution'],
-  Finance: ['quarterly revenue recognition', 'expense reimbursement', 'accounts payable aging', 'capital expenditure approval', 'budget variance'],
-  Procurement: ['supplier qualification', 'purchase order thresholds', 'competitive bidding', 'vendor risk assessment', 'contract renewal'],
-  IT: ['identity and access management', 'backup and disaster recovery', 'endpoint encryption', 'incident response', 'cloud cost optimization'],
-  Operations: ['warehouse throughput', 'service level objectives', 'fleet maintenance', 'capacity planning', 'quality inspection'],
-  Compliance: ['records retention schedule', 'anti-bribery controls', 'GDPR subject access requests', 'SOC 2 evidence collection', 'whistleblower reporting'],
-  Sales: ['enterprise pricing tiers', 'territory planning', 'renewal forecasting', 'partner referral program', 'discount approval matrix'],
-}
-
-function paragraph(rand: () => number, dept: Department, company: string) {
-  const topic = pick(rand, TOPICS[dept])
+function paragraph(rand: () => number, pack: LocalePack, dept: Department, company: string) {
+  const topic = pick(rand, pack.topics[dept])
   const person = pick(rand, PEOPLE)
   const amount = Math.round(rand() * 900 + 100) * 100
   const days = Math.round(rand() * 80 + 10)
-  const templates = [
-    `This section governs ${topic} for ${company}. ${person} is accountable for maintaining the controls described herein and must review them at least every ${days} days.`,
-    `Any commitment related to ${topic} exceeding USD ${amount.toLocaleString('en-US')} requires written approval from the ${dept} department lead prior to execution.`,
-    `Exceptions concerning ${topic} must be documented, include a business justification, and be retained in accordance with the corporate records retention schedule.`,
-    `${person} confirmed that the ${topic} process was tested during the period, with ${Math.round(rand() * 20)} findings logged and remediation due within ${days} days.`,
-    `The parties agree that obligations relating to ${topic} survive termination for a period of ${Math.round(rand() * 5 + 1)} years.`,
-  ]
-  return pick(rand, templates)
+  const findings = Math.round(rand() * 20)
+  const years = Math.round(rand() * 5 + 1)
+  const template = pick(rand, pack.paragraphs)
+  return template({ topic, company, person, dept: pack.departments[dept], amount: amount.toLocaleString(pack.locale), days, findings, years })
 }
 
-function buildContent(rand: () => number, dept: Department, type: DocumentType, index: number, revision: number) {
+const capitalize = (s: string) => s.charAt(0).toLocaleUpperCase() + s.slice(1)
+
+function buildContent(rand: () => number, pack: LocalePack, dept: Department, type: DocumentType, index: number, revision: number) {
   const company = pick(rand, COMPANIES)
   const owner = pick(rand, PEOPLE)
   const ref = `${dept.slice(0, 3).toUpperCase()}-${type.slice(0, 3).toUpperCase()}-${String(10000 + index)}`
-  const title = `${type}: ${company} ${pick(rand, TOPICS[dept]).replace(/\b\w/g, (c) => c.toUpperCase())}`
-  const sections = ['Purpose', 'Scope', 'Definitions', 'Responsibilities', 'Terms', 'Controls', 'Review']
-  const body: string[] = [
-    `Reference: ${ref}  |  Revision: ${revision}  |  Owner: ${owner}  |  Department: ${dept}`,
-    'FICTIONAL DOCUMENT GENERATED FOR DEMONSTRATION PURPOSES. NOT A REAL AGREEMENT OR RECORD.',
-    '',
-  ]
+  const typeLabel = pack.documentTypes[type]
+  const title = `${typeLabel}: ${company} - ${capitalize(pick(rand, pack.topics[dept]))}`
+  const body: string[] = [pack.header({ ref, revision, owner, dept: pack.departments[dept] }), pack.disclaimer, '']
   const count = 3 + Math.floor(rand() * 4)
   for (let s = 0; s < count; s++) {
-    body.push(`${s + 1}. ${sections[s % sections.length]}:`)
+    body.push(`${s + 1}. ${pack.sections[s % pack.sections.length]}:`)
     const paras = 2 + Math.floor(rand() * 3)
-    for (let p = 0; p < paras; p++) body.push(paragraph(rand, dept, company))
+    for (let p = 0; p < paras; p++) body.push(paragraph(rand, pack, dept, company))
     body.push('')
   }
-  if (revision > 1) body.push(`Revision ${revision} notes: clarified thresholds and updated accountable owner.`)
-  return { title, text: body.join('\n'), ref, company, owner }
+  if (revision > 1) body.push(pack.revisionNote(revision))
+  return { title, text: body.join('\n'), ref, company, owner, typeLabel }
 }
 
 export interface GeneratorOptions {
@@ -62,6 +46,7 @@ export interface GeneratorOptions {
   departments: Department[]
   formats: ('txt' | 'pdf')[]
   maxVersions: number
+  language: GeneratorLanguage
 }
 
 export async function createGenerationRun(opts: GeneratorOptions): Promise<GenerationRun> {
@@ -76,6 +61,7 @@ export async function createGenerationRun(opts: GeneratorOptions): Promise<Gener
     formats: opts.formats,
     departments: opts.departments,
     maxVersions: opts.maxVersions,
+    language: opts.language,
     status: 'paused',
     checkpoint: 0,
     correlationId: actor.correlationId,
@@ -96,7 +82,7 @@ export async function createGenerationRun(opts: GeneratorOptions): Promise<Gener
       result: 'success',
       correlationId: actor.correlationId,
       requestId: newId('req'),
-      details: { target: opts.target, seed: opts.seed, formats: opts.formats },
+      details: { target: opts.target, seed: opts.seed, formats: opts.formats, language: opts.language },
     })
   })
   return run
@@ -136,6 +122,8 @@ export async function executeRun(runId: string, onProgress?: () => void) {
     if (!run) throw new Error('Run not found')
     await patchRun(runId, { status: 'running', error: undefined })
     const baseTime = Date.parse(run.createdAt)
+    const language = run.language ?? 'en'
+    const pack = LOCALE_PACKS[language]
     for (let i = run.checkpoint; i < run.target; i++) {
       if (handle.stop) {
         await patchRun(runId, { status: handle.stop === 'pause' ? 'paused' : 'cancelled' })
@@ -147,7 +135,7 @@ export async function executeRun(runId: string, onProgress?: () => void) {
       const format = pick(rand, run.formats)
       const versionCount = 1 + Math.floor(rand() * run.maxVersions)
       const versions = Array.from({ length: versionCount }, (_, v) => {
-        const content = buildContent(mulberry32(run.seed * 7919 + i * 31 + v), dept, type, i, v + 1)
+        const content = buildContent(mulberry32(run.seed * 7919 + i * 31 + v), pack, dept, type, i, v + 1)
         const pages = paginate(content.text)
         const blob = format === 'pdf' ? buildPdf(content.title, pages) : new Blob([pages.join('\f')], { type: 'text/plain' })
         return { content, pages, blob }
@@ -165,12 +153,12 @@ export async function executeRun(runId: string, onProgress?: () => void) {
           mimeType,
           pages: initial.pages,
           title: first.title,
-          description: `Fictional ${type.toLowerCase()} for ${first.company}, owned by ${first.owner}.`,
+          description: pack.description({ type: first.typeLabel, company: first.company, owner: first.owner }),
           department: dept,
           documentType: type,
           classification,
-          tags: [dept.toLowerCase(), type.toLowerCase().replace(/\s+/g, '-'), 'generated'],
-          metadata: { reference: first.ref, counterparty: first.company, accountableOwner: first.owner },
+          tags: [dept.toLowerCase(), type.toLowerCase().replace(/\s+/g, '-'), 'generated', `lang-${language}`],
+          metadata: { reference: first.ref, counterparty: first.company, accountableOwner: first.owner, language },
           datasetId: run.datasetId,
           generationRunId: run._id,
           createdAt: new Date(baseTime - Math.floor(rand() * 30) * 86400000).toISOString(),
