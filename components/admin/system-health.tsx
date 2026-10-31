@@ -6,6 +6,7 @@ import { Body, H3 } from '@leafygreen-ui/typography'
 import { PageHeader } from '@/components/shell/page-header'
 import useSWR from 'swr'
 import { fetchAtlasStatus, useDemoState } from '@/lib/demo/store'
+import { describeStorage, fetchStorageStatus } from '@/lib/demo/storage'
 
 type Health = 'healthy' | 'degraded' | 'not configured'
 const VARIANT: Record<Health, 'green' | 'yellow' | 'lightgray'> = { healthy: 'green', degraded: 'yellow', 'not configured': 'lightgray' }
@@ -17,6 +18,7 @@ export function SystemHealth() {
   const unindexed = s.documentVersions.filter((v) => v.pipeline.some((p) => p.step === 'search_indexing' && p.status !== 'succeeded')).length
 
   const { data: atlas } = useSWR('atlas-status', fetchAtlasStatus, { refreshInterval: 30000 })
+  const { data: storage, error: storageError } = useSWR('storage-status', fetchStorageStatus)
   const atlasHealth: Health = !atlas ? 'degraded' : atlas.connected ? 'healthy' : atlas.configured ? 'degraded' : 'not configured'
   const components: { name: string; status: Health; detail: string }[] = [
     {
@@ -24,7 +26,15 @@ export function SystemHealth() {
       status: atlasHealth,
       detail: `MongoDB Atlas - ${s.documents.length} documents, ${s.documentVersions.length} versions`,
     },
-    { name: 'Object storage', status: atlasHealth, detail: 'MongoDB GridFS bucket with checksum verification' },
+    {
+      name: 'Object storage',
+      status: storageError ? 'degraded' : atlasHealth,
+      detail: storageError
+        ? 'Unable to load storage settings'
+        : storage
+          ? `${describeStorage(storage)} with checksum verification`
+          : 'Loading storage settings...',
+    },
     { name: 'Search index', status: unindexed ? 'degraded' : 'healthy', detail: `${s.documentChunks.length} chunks indexed, ${unindexed} versions not indexed` },
     { name: 'Embeddings', status: 'not configured', detail: 'Semantic search unavailable until a provider is configured' },
     { name: 'Event streaming', status: 'not configured', detail: `${pending} outbox events pending publication` },
