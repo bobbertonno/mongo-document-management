@@ -149,6 +149,8 @@ async function semanticSearch(state: DemoState, byId: Map<string, DmsDocument>, 
   return {
     ranked: { hits: finalize(perDoc), chunksScanned: result.hits.length, chunksMatched } satisfies RankedResult,
     model: result.model,
+    automated: result.automated,
+    index: result.index,
   }
 }
 
@@ -175,8 +177,8 @@ export async function runSearch(mode: SearchMode, query: string, filters: Search
   const actor = currentActor()
   const state = getDemoState()
   const usesVectors = mode === 'semantic' || mode === 'hybrid'
-  if (usesVectors && state.setup?.embeddingMode !== 'voyage') {
-    throw new Error('Vector search is not initialized. Initialize Voyage AI + Atlas Vector Search in System Settings.')
+  if (usesVectors && (!state.setup?.embeddingMode || state.setup.embeddingMode === 'disabled')) {
+    throw new Error('Vector search is not initialized. Configure the embedding provider in System Settings.')
   }
   const candidates = currentDocs(state, filters)
   const authorized = candidates.filter((d) => canRead(actor.user, d))
@@ -187,6 +189,7 @@ export async function runSearch(mode: SearchMode, query: string, filters: Search
 
   let ranked: RankedResult = { hits: [], chunksScanned: 0, chunksMatched: 0 }
   let engine = ''
+  let vector: VectorPipelineInfo | undefined
 
   if (mode === 'metadata') {
     const q = query.trim().toLowerCase()
@@ -208,9 +211,11 @@ export async function runSearch(mode: SearchMode, query: string, filters: Search
   } else {
     if (!query.trim()) throw new Error('Enter a search query')
     const semantic = await semanticSearch(state, byId, query, actor.tenantId, termSet)
+    vector = { automated: semantic.automated, model: semantic.model, index: semantic.index }
+    const embedder = semantic.automated ? `Atlas automated embedding, ${semantic.model}` : semantic.model
     if (mode === 'semantic') {
       ranked = semantic.ranked
-      engine = `Atlas Vector Search + Voyage AI (${semantic.model})`
+      engine = `Atlas Vector Search (${embedder})`
     } else {
       const lexical = terms.length ? lexicalSearch(state, byId, termSet) : { hits: [], chunksScanned: 0, chunksMatched: 0 }
       ranked = {
@@ -218,7 +223,7 @@ export async function runSearch(mode: SearchMode, query: string, filters: Search
         chunksScanned: lexical.chunksScanned + semantic.ranked.chunksScanned,
         chunksMatched: lexical.chunksMatched + semantic.ranked.chunksMatched,
       }
-      engine = `Reciprocal rank fusion: BM25 + Atlas Vector Search (${semantic.model})`
+      engine = `Reciprocal rank fusion: BM25 + Atlas Vector Search (${embedder})`
     }
   }
 
@@ -234,7 +239,7 @@ export async function runSearch(mode: SearchMode, query: string, filters: Search
     deniedByAcl,
     latencyMs: Math.round((performance.now() - t0) * 100) / 100,
     facets: facetsOf(ranked.hits.map((h) => h.document)),
-    equivalentAtlasPipeline: equivalentPipeline(mode, query, filters, limit),
+    equivalentAtlasPipeline: equivalentPipeline(mode, query, filters, limit, vector),
   }
   await recordAudit(
     {
@@ -249,18 +254,25 @@ export async function runSearch(mode: SearchMode, query: string, filters: Search
   return response
 }
 
-const vectorStage = (limit: number) => ({
+interface VectorPipelineInfo {
+  automated: boolean
+  model: string
+  index: string
+}
+
+const vectorStage = (limit: number, query: string, vector?: VectorPipelineInfo) => ({
   $vectorSearch: {
-    index: 'document_chunks_vector',
-    path: 'embedding',
-    queryVector: '<Voyage AI query embedding, 1024 dims>',
+    index: vector?.index ?? 'document_chunks_vector_<provider>',
+    ...(vector?.automated
+      ? { path: 'text', query: { text: query } }
+      : { path: 'embedding', queryVector: `<${vector?.model ?? 'provider'} query embedding>` }),
     numCandidates: limit * 10,
     limit: limit * 5,
     filter: { tenantId: '<session.tenantId>' },
   },
 })
 
-function equivalentPipeline(mode: SearchMode, query: string, filters: SearchFilters, limit: number): object[] {
+function equivalentPipeline(mode: SearchMode, query: string, filters: SearchFilters, limit: number, vector?: VectorPipelineInfo): object[] {
   const filter = Object.fromEntries(Object.entries(filters).filter(([, v]) => v))
   if (mode === 'metadata') {
     return [
@@ -272,7 +284,7 @@ function equivalentPipeline(mode: SearchMode, query: string, filters: SearchFilt
   }
   if (mode === 'semantic') {
     return [
-      vectorStage(limit),
+      vectorStage(limit, query, vector),
       { $project: { documentId: 1, versionId: 1, pageNumber: 1, score: { $meta: 'vectorSearchScore' } } },
       { $group: { _id: '$documentId', score: { $max: '$score' }, chunks: { $push: '$$ROOT' } } },
       { $sort: { score: -1 } },
@@ -297,7 +309,7 @@ function equivalentPipeline(mode: SearchMode, query: string, filters: SearchFilt
     return [
       {
         $rankFusion: {
-          input: { pipelines: { vector: [vectorStage(limit)], fullText: [searchStage, { $limit: limit * 5 }] } },
+          input: { pipelines: { vector: [vectorStage(limit, query, vector)], fullText: [searchStage, { $limit: limit * 5 }] } },
           combination: { weights: { vector: 1, fullText: 1 } },
         },
       },

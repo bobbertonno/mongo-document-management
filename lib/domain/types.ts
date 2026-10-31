@@ -52,7 +52,8 @@ export interface SetupState {
   adminName: string
   adminEmail: string
   storageProvider: StorageProvider
-  embeddingMode: 'disabled' | 'automated' | 'voyage'
+  /** 'automated' = Atlas auto-embedding; 'custom' = app embeds with a stored provider key; 'voyage' = legacy custom. */
+  embeddingMode: 'disabled' | 'automated' | 'custom' | 'voyage'
   kafkaMode: 'simulator' | 'external'
   completedAt?: string
 }

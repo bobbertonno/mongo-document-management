@@ -13,7 +13,8 @@ import { useToast } from '@/components/shared/toast'
 import { setupEnvironmentSchema } from '@/lib/domain/types'
 import { completeSetup } from '@/lib/demo/services'
 import { fetchAtlasStatus, useDemoState } from '@/lib/demo/store'
-import { fetchVectorStatus, initVectorSearch } from '@/lib/demo/vector'
+import { embeddingModeFor, fetchVectorStatus, initVectorSearch } from '@/lib/demo/vector'
+import type { EmbeddingConfigInput } from '@/lib/domain/embedding'
 import useSWR from 'swr'
 import { VectorSearchPanel } from './vector-search-panel'
 
@@ -53,14 +54,19 @@ export function SetupWizard() {
     refreshInterval: (latest) => (latest?.index && !latest.index.queryable ? 4000 : 0),
   })
   const [initializingVector, setInitializingVector] = useState(false)
-  const vectorReady = !!vector?.voyageConfigured && !!vector.index
-  const embeddingMode = vectorReady ? 'voyage' : 'disabled'
+  const vectorReady = !!vector?.configured && !!vector.index
+  const embeddingMode = vectorReady ? embeddingModeFor(vector) : 'disabled'
 
-  const initializeVector = async () => {
+  const initializeVector = async (config: EmbeddingConfigInput) => {
     setInitializingVector(true)
     try {
-      await mutateVector(await initVectorSearch(), { revalidate: false })
-      pushToast({ variant: 'success', title: 'Vector search initialized', description: 'Atlas Vector Search index created.' })
+      const status = await initVectorSearch(config)
+      await mutateVector(status, { revalidate: false })
+      pushToast({
+        variant: 'success',
+        title: 'Vector search initialized',
+        description: status.automated ? `Atlas automated embedding with ${status.model}.` : `Custom embeddings with ${status.model}.`,
+      })
     } catch (error) {
       pushToast({ variant: 'warning', title: 'Vector search failed', description: (error as Error).message })
     } finally {
@@ -227,13 +233,18 @@ export function SetupWizard() {
                 </tbody>
               </table>
             </div>
-            <VectorSearchPanel
-              status={vector}
-              loading={vectorLoading}
-              error={vectorError as Error | undefined}
-              initializing={initializingVector}
-              onInitialize={() => void initializeVector()}
-            />
+            {vector || vectorError ? (
+              <VectorSearchPanel
+                key={vector ? `${vector.provider}:${vector.model}` : 'error'}
+                status={vector}
+                loading={vectorLoading}
+                error={vectorError as Error | undefined}
+                saving={initializingVector}
+                onSave={(config) => void initializeVector(config)}
+              />
+            ) : (
+              <Body className="text-sm text-muted">Checking Atlas Vector Search...</Body>
+            )}
           </>
         )}
 
@@ -252,7 +263,13 @@ export function SetupWizard() {
               <dt className="text-muted">Storage</dt>
               <dd>mongodb-gridfs</dd>
               <dt className="text-muted">Embeddings</dt>
-              <dd>{vectorReady ? `Voyage AI ${vector.model} (${vector.dimensions} dims) + Atlas Vector Search` : 'disabled'}</dd>
+              <dd>
+                {vectorReady
+                  ? vector.automated
+                    ? `MongoDB Atlas automated embedding, ${vector.model}`
+                    : `${vector.provider === 'openai' ? 'OpenAI' : 'Voyage AI'} ${vector.model} (${vector.dimensions} dims, your API key)`
+                  : 'disabled'}
+              </dd>
             </dl>
           </>
         )}
