@@ -27,7 +27,7 @@ import { commit, deleteObject, getDemoState, getObject, putObject, reloadState }
 import { newId, nowIso, sha256Hex } from './util'
 import { embedChunks } from './vector'
 
-const storageProvider = (): StorageProvider => 'mongodb-gridfs'
+const storageProvider = (): StorageProvider => getDemoState().setup?.storageProvider ?? 'mongodb-gridfs'
 
 export class DomainError extends Error {
   constructor(
@@ -115,8 +115,10 @@ export async function completeSetup(input: {
   adminName: string
   adminEmail: string
   embeddingMode?: SetupState['embeddingMode']
+  storageProvider?: StorageProvider
 }) {
   const embeddingMode = input.embeddingMode ?? 'disabled'
+  const selectedStorage = input.storageProvider ?? 'mongodb-gridfs'
   const mode = 'atlas' as const
   await reloadState()
   if (getDemoState().setup?.completed) {
@@ -132,7 +134,7 @@ export async function completeSetup(input: {
     tenantId,
     adminName: input.adminName,
     adminEmail: input.adminEmail,
-    storageProvider: storageProvider(),
+    storageProvider: selectedStorage,
     embeddingMode,
     kafkaMode: 'simulator',
     completedAt: nowIso(),
@@ -161,6 +163,23 @@ export async function completeSetup(input: {
       correlationId,
       requestId: newId('req'),
       after: { mode, storageProvider: setup.storageProvider, embeddingMode, kafkaMode: 'simulator' },
+    })
+  })
+}
+
+/** Records the object storage backend after the server accepted and verified it. */
+export async function setStorageProvider(provider: StorageProvider, details: Record<string, string>, actor = currentActor()) {
+  await commit((draft) => {
+    if (!draft.setup) throw new DomainError('CONFLICT', 'Complete setup first')
+    const before = draft.setup.storageProvider
+    draft.setup.storageProvider = provider
+    audit(draft, actor, {
+      action: 'settings.storage_configured',
+      resourceType: 'system_settings',
+      resourceId: draft.setup.tenantId,
+      result: 'success',
+      before: { storageProvider: before },
+      after: { storageProvider: provider, ...details },
     })
   })
 }

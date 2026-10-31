@@ -9,6 +9,7 @@ import { Body, H3 } from '@leafygreen-ui/typography'
 import { PageHeader } from '@/components/shell/page-header'
 import { resetDemoState, useDemoState } from '@/lib/demo/store'
 import { formatDateTime } from '@/lib/demo/util'
+import { StorageSettings } from './storage-settings'
 import { VectorSearchSettings } from './vector-search-settings'
 
 export function SystemSettings() {
@@ -53,7 +54,7 @@ export function SystemSettings() {
         <Card className="flex flex-col gap-3">
           <H3>Reset all data</H3>
           <Body className="text-muted">
-            Permanently removes every document, GridFS binary, audit event and setting from the MongoDB Atlas database.
+            Permanently removes every document, stored binary (GridFS and the configured S3 prefix), audit event and setting from the MongoDB Atlas database.
           </Body>
           {confirming ? (
             <>
@@ -86,6 +87,7 @@ export function SystemSettings() {
             </Button>
           )}
         </Card>
+        {setup && <StorageSettings />}
         {setup && <VectorSearchSettings />}
       </div>
     </>
