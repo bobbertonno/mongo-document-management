@@ -7,6 +7,7 @@ import { PageHeader } from '@/components/shell/page-header'
 import useSWR from 'swr'
 import { fetchAtlasStatus, useDemoState } from '@/lib/demo/store'
 import { describeStorage, fetchStorageStatus } from '@/lib/demo/storage'
+import { fetchVectorStatus } from '@/lib/demo/vector'
 
 type Health = 'healthy' | 'degraded' | 'not configured'
 const VARIANT: Record<Health, 'green' | 'yellow' | 'lightgray'> = { healthy: 'green', degraded: 'yellow', 'not configured': 'lightgray' }
@@ -19,6 +20,7 @@ export function SystemHealth() {
 
   const { data: atlas } = useSWR('atlas-status', fetchAtlasStatus, { refreshInterval: 30000 })
   const { data: storage, error: storageError } = useSWR('storage-status', fetchStorageStatus)
+  const { data: vector, error: vectorError } = useSWR('vector-status', fetchVectorStatus, { refreshInterval: 30000 })
   const atlasHealth: Health = !atlas ? 'degraded' : atlas.connected ? 'healthy' : atlas.configured ? 'degraded' : 'not configured'
   const components: { name: string; status: Health; detail: string }[] = [
     {
@@ -36,7 +38,27 @@ export function SystemHealth() {
           : 'Loading storage settings...',
     },
     { name: 'Search index', status: unindexed ? 'degraded' : 'healthy', detail: `${s.documentChunks.length} chunks indexed, ${unindexed} versions not indexed` },
-    { name: 'Embeddings', status: 'not configured', detail: 'Semantic search unavailable until a provider is configured' },
+    {
+      name: 'Embeddings',
+      status: vectorError
+        ? 'degraded'
+        : !vector
+          ? atlasHealth
+          : !vector.configured
+            ? 'not configured'
+            : vector.index?.queryable
+              ? 'healthy'
+              : 'degraded',
+      detail: vectorError
+        ? 'Unable to load vector search settings'
+        : !vector
+          ? 'Loading vector search settings...'
+          : !vector.configured
+            ? 'Semantic search unavailable until a provider is configured'
+            : `${vector.automated ? 'Atlas automated embedding' : 'Custom provider'} - ${vector.provider} ${vector.model}${
+                vector.index ? `, index "${vector.index.name}" ${vector.index.status.toLowerCase()}` : ', index missing'
+              }${vector.automated ? '' : `, ${vector.chunks.embedded}/${vector.chunks.total} chunks embedded`}`,
+    },
     { name: 'Event streaming', status: 'not configured', detail: `${pending} outbox events pending publication` },
     { name: 'Generator workers', status: failedRuns ? 'degraded' : 'healthy', detail: `${s.generationRuns.length} runs, ${failedRuns} failed` },
     {
