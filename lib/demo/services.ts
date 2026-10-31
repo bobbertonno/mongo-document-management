@@ -23,6 +23,8 @@ import {
   type StorageProvider,
   type User,
 } from '@/lib/domain/types'
+import { ADMIN_ROLES, PERMISSION_LABELS, ROLE_RANK, accessRankFor, type Permission } from '@/lib/domain/access'
+import { customRolesOf, hasPermission, resolveActingUser } from './actor'
 import { commit, deleteObject, getDemoState, getObject, putObject, reloadState } from './store'
 import { newId, nowIso, sha256Hex } from './util'
 import { embedChunks } from './vector'
@@ -47,9 +49,15 @@ export interface ActorContext {
 export function currentActor(correlationId = newId('corr')): ActorContext {
   const state = getDemoState()
   if (!state.setup?.completed) throw new DomainError('FORBIDDEN', 'Setup has not been completed')
-  const user = state.users[0]
-  if (!user) throw new DomainError('FORBIDDEN', 'No bootstrap administrator found')
+  const user = resolveActingUser(state)
+  if (!user) throw new DomainError('FORBIDDEN', 'No active user found')
   return { user, tenantId: state.setup.tenantId, correlationId }
+}
+
+export function requirePermission(actor: ActorContext, permission: Permission) {
+  if (!hasPermission(getDemoState(), actor.user, permission)) {
+    throw new DomainError('FORBIDDEN', `${actor.user.name} does not have the "${PERMISSION_LABELS[permission].label}" permission`)
+  }
 }
 
 function audit(
@@ -85,13 +93,13 @@ function outbox(draft: DemoState, actor: ActorContext, topic: string, key: strin
   draft.outboxEvents.push(event)
 }
 
-const ROLE_RANK: Record<Role, number> = Object.fromEntries(ROLES.map((r, i) => [r, ROLES.length - i])) as Record<Role, number>
 
 /** Document-level authorization, applied in every read path before limiting results. */
 export function canRead(user: User, doc: DmsDocument): boolean {
   if (user.tenantId !== doc.tenantId) return false
-  if (user.roles.includes('PlatformAdmin') || user.roles.includes('TenantAdmin')) return true
-  const best = Math.max(...user.roles.map((r) => ROLE_RANK[r]))
+  if (user.status === 'disabled') return false
+  const best = accessRankFor(user, customRolesOf(getDemoState()))
+  if (best >= ROLE_RANK.TenantAdmin || user.roles.some((r) => (ADMIN_ROLES as string[]).includes(r))) return true
   if (best < ROLE_RANK[doc.accessPolicy.minRole]) return false
   return doc.accessPolicy.departments === 'all' || (!!user.department && doc.accessPolicy.departments.includes(user.department))
 }
@@ -169,6 +177,7 @@ export async function completeSetup(input: {
 
 /** Records the object storage backend after the server accepted and verified it. */
 export async function setStorageProvider(provider: StorageProvider, details: Record<string, string>, actor = currentActor()) {
+  requirePermission(actor, 'settings.manage')
   await commit((draft) => {
     if (!draft.setup) throw new DomainError('CONFLICT', 'Complete setup first')
     const before = draft.setup.storageProvider
@@ -186,6 +195,7 @@ export async function setStorageProvider(provider: StorageProvider, details: Rec
 
 /** Records which embedding mode the tenant uses after the vector index was (re)configured. */
 export async function enableVectorSearch(mode: 'automated' | 'custom', details: { provider: string; model: string }, actor = currentActor()) {
+  requirePermission(actor, 'settings.manage')
   await commit((draft) => {
     if (!draft.setup) throw new DomainError('CONFLICT', 'Complete setup first')
     const before = draft.setup.embeddingMode
@@ -381,6 +391,7 @@ export interface CreateDocumentInput extends IngestInput {
 }
 
 export async function createDocument(input: CreateDocumentInput, actor = currentActor()) {
+  requirePermission(actor, input.generationRunId ? 'documents.generate' : 'documents.create')
   const ingested = [await runPipeline(input)]
   for (const extra of input.extraVersions ?? []) ingested.push(await runPipeline(extra))
   const state = getDemoState()
@@ -478,6 +489,7 @@ function loadDoc(documentId: string, actor: ActorContext) {
 }
 
 export async function uploadNewVersion(documentId: string, file: File, expectedConcurrency: number, actor = currentActor()) {
+  requirePermission(actor, 'documents.edit')
   const doc = loadDoc(documentId, actor)
   if (doc.deletedAt) throw new DomainError('CONFLICT', 'Restore the document before adding versions')
   if (doc.concurrencyVersion !== expectedConcurrency)
@@ -539,6 +551,7 @@ export async function uploadNewVersion(documentId: string, file: File, expectedC
 }
 
 export async function updateMetadata(documentId: string, patch: DocumentMetadataPatch, expectedConcurrency: number, actor = currentActor()) {
+  requirePermission(actor, 'documents.edit')
   const parsed = documentMetadataPatchSchema.safeParse(patch)
   if (!parsed.success) throw new DomainError('VALIDATION', parsed.error.issues[0]?.message ?? 'Invalid metadata')
   const doc = loadDoc(documentId, actor)
@@ -576,6 +589,7 @@ export async function updateMetadata(documentId: string, patch: DocumentMetadata
 }
 
 export async function softDelete(documentId: string, actor = currentActor()) {
+  requirePermission(actor, 'documents.delete')
   const doc = loadDoc(documentId, actor)
   if (doc.deletedAt) return
   await commit((draft) => {
@@ -588,6 +602,7 @@ export async function softDelete(documentId: string, actor = currentActor()) {
 }
 
 export async function restoreDocument(documentId: string, actor = currentActor()) {
+  requirePermission(actor, 'documents.delete')
   loadDoc(documentId, actor)
   await commit((draft) => {
     const target = draft.documents.find((d) => d._id === documentId)!
@@ -630,6 +645,7 @@ export async function recordAudit(event: Parameters<typeof audit>[2], actor = cu
 
 /** Removes only records tagged with the dataset id, plus their stored binaries. */
 export async function cleanupDataset(datasetId: string, actor = currentActor()) {
+  requirePermission(actor, 'documents.delete')
   const state = getDemoState()
   const docIds = new Set(state.documents.filter((d) => d.datasetId === datasetId).map((d) => d._id))
   const keys = state.documentVersions.filter((v) => docIds.has(v.documentId)).map((v) => v.objectKey)

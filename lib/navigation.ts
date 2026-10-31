@@ -80,7 +80,7 @@ export const NAV: NavGroup[] = [
     header: 'Administration',
     glyph: 'Settings',
     items: [
-      planned('Users & Roles', 'users-roles'),
+      { label: 'Users & Roles', href: '/admin/users', implemented: true },
       planned('Integrations', 'integrations'),
       { label: 'System Settings', href: '/admin/settings', implemented: true },
       { label: 'Setup Wizard', href: '/setup', implemented: true },

@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import type { RoleDefinition } from './access'
 
 export const DEPARTMENTS = ['HR', 'Legal', 'Finance', 'Procurement', 'IT', 'Operations', 'Compliance', 'Sales'] as const
 export const DOCUMENT_TYPES = [
@@ -63,8 +64,12 @@ export interface User {
   tenantId: string
   name: string
   email: string
-  roles: Role[]
-  department?: Department
+  /** Built-in role names or custom role ids from the `roles` collection. */
+  roles: string[]
+  department?: Department | null
+  status?: 'active' | 'disabled'
+  createdAt?: string
+  updatedAt?: string
 }
 
 export interface Folder {
@@ -207,6 +212,7 @@ export interface DemoState {
   schemaVersion: 1
   setup: SetupState | null
   users: User[]
+  roles: RoleDefinition[]
   folders: Folder[]
   documents: DmsDocument[]
   documentVersions: DocumentVersion[]

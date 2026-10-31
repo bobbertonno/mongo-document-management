@@ -5,6 +5,7 @@ const DB_NAME = process.env.MONGODB_DB || 'atlas_document_hub'
 /** Maps each DemoState collection to its MongoDB collection and natural id field. */
 export const COLLECTIONS = {
   users: { name: 'users', idField: '_id' },
+  roles: { name: 'roles', idField: '_id' },
   folders: { name: 'folders', idField: '_id' },
   documents: { name: 'documents', idField: '_id' },
   documentVersions: { name: 'document_versions', idField: '_id' },

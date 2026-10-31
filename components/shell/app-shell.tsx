@@ -14,6 +14,7 @@ import { NAV } from '@/lib/navigation'
 import Banner from '@leafygreen-ui/banner'
 import Button from '@leafygreen-ui/button'
 import { loadDemoState, useDemoState, useStoreStatus } from '@/lib/demo/store'
+import { ActingUserSwitcher } from './acting-user-switcher'
 
 const THEME_KEY = 'adh-theme'
 
@@ -117,11 +118,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                   <IconButton aria-label={darkMode ? 'Switch to light theme' : 'Switch to dark theme'} onClick={toggleTheme}>
                     <Icon glyph={darkMode ? 'Sun' : 'Moon'} />
                   </IconButton>
-                  <div className="flex items-center gap-2 border-l border-border pl-3">
-                    <Icon glyph="Person" />
-                    <Body baseFontSize={13}>{state.users[0]?.name}</Body>
-                    <Badge variant="lightgray">{state.users[0]?.roles[0]}</Badge>
-                  </div>
+                  <ActingUserSwitcher />
                 </div>
               </header>
               <main className="flex-1 px-6 py-6">{children}</main>
