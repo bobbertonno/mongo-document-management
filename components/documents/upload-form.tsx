@@ -2,6 +2,8 @@
 
 import { useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import useSWR from 'swr'
+import { describeStorage, fetchStorageStatus } from '@/lib/demo/storage'
 import Button from '@leafygreen-ui/button'
 import Card from '@leafygreen-ui/card'
 import Banner from '@leafygreen-ui/banner'
@@ -21,6 +23,7 @@ const ACCEPT = Object.entries(ALLOWED_MIME_TYPES)
 
 export function UploadForm() {
   const router = useRouter()
+  const { data: storage } = useSWR('storage-status', fetchStorageStatus)
   const { pushToast } = useToast()
   const inputRef = useRef<HTMLInputElement>(null)
   const [file, setFile] = useState<File | null>(null)
@@ -118,7 +121,11 @@ export function UploadForm() {
         </Card>
       </div>
       <div className="mt-3">
-        <EngineNote>Binary stored in MongoDB GridFS; metadata, audit and outbox committed together in one Atlas transaction.</EngineNote>
+        <EngineNote>
+          {storage
+            ? `Binary stored in ${describeStorage(storage)}; metadata, audit and outbox committed together in one Atlas transaction.`
+            : 'Metadata, audit and outbox committed together in one Atlas transaction.'}
+        </EngineNote>
       </div>
     </>
   )
